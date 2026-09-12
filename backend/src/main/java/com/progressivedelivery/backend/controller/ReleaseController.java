@@ -131,4 +131,26 @@ public class ReleaseController {
             this.approved = approved;
         }
     }
+     @PostMapping("/{id}/canary")
+    public ResponseEntity<?> startCanary(
+        @PathVariable int id) {
+
+    for (Release release : releases) {
+
+        if (release.getId() == id) {
+
+            if (!release.isApproved()) {
+                return ResponseEntity.badRequest().body(
+                        "Release must be approved before starting canary"
+                );
+            }
+
+            release.setStatus("CANARY");
+
+            return ResponseEntity.ok(release);
+        }
+    }
+
+    return ResponseEntity.notFound().build();
+}   
 }
