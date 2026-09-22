@@ -1,18 +1,29 @@
 package com.progressivedelivery.backend.controller;
 
+import com.progressivedelivery.backend.model.Release;
+import com.progressivedelivery.backend.repository.ReleaseRepository;
+
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.ArrayList;
 import java.util.List;
+import com.progressivedelivery.backend.model.AuditLog;
+import com.progressivedelivery.backend.repository.AuditLogRepository;
 
 @RestController
 @RequestMapping("/api/releases")
 public class ReleaseController {
 
-    private final List<Release> releases = new ArrayList<>();
+    private final ReleaseRepository releaseRepository;
+    private final AuditLogRepository auditLogRepository;
 
-    private int nextId = 1;
+    public ReleaseController(
+        ReleaseRepository releaseRepository,
+        AuditLogRepository auditLogRepository) {
+
+    this.releaseRepository = releaseRepository;
+    this.auditLogRepository = auditLogRepository;
+}
 
     // Create a new release
     @PostMapping
@@ -20,41 +31,93 @@ public class ReleaseController {
             @RequestBody ReleaseRequest request) {
 
         Release release = new Release(
-                nextId++,
                 request.getServiceName(),
                 request.getVersion(),
                 "CREATED",
                 false
         );
 
-        releases.add(release);
+        Release savedRelease = releaseRepository.save(release);
 
-        return ResponseEntity.ok(release);
+AuditLog auditLog = new AuditLog(
+        "RELEASE_CREATED",
+        savedRelease.getServiceName(),
+        savedRelease.getVersion(),
+        "Release created successfully"
+);
+
+auditLogRepository.save(auditLog);
+
+return ResponseEntity.ok(savedRelease);
     }
 
     // Get all releases
     @GetMapping
     public List<Release> getReleases() {
-        return releases;
+        return releaseRepository.findAll();
     }
 
     // Approve a release
     @PostMapping("/{id}/approve")
     public ResponseEntity<?> approveRelease(
-            @PathVariable int id) {
+            @PathVariable Integer id) {
 
-        for (Release release : releases) {
+        return releaseRepository.findById(id)
+                .map(release -> {
 
-            if (release.getId() == id) {
+                    release.setApproved(true);
+                    release.setStatus("APPROVED");
 
-                release.setApproved(true);
-                release.setStatus("APPROVED");
+                   Release updatedRelease = releaseRepository.save(release);
 
-                return ResponseEntity.ok(release);
-            }
-        }
+AuditLog auditLog = new AuditLog(
+        "RELEASE_APPROVED",
+        updatedRelease.getServiceName(),
+        updatedRelease.getVersion(),
+        "Release approved successfully"
+);
 
-        return ResponseEntity.notFound().build();
+auditLogRepository.save(auditLog);
+
+return ResponseEntity.ok(updatedRelease);
+                })
+                .orElseGet(() ->
+                        ResponseEntity.notFound().build()
+                );
+    }
+
+    // Start canary deployment
+    @PostMapping("/{id}/canary")
+    public ResponseEntity<?> startCanary(
+            @PathVariable Integer id) {
+
+        return releaseRepository.findById(id)
+                .map(release -> {
+
+                    if (!release.isApproved()) {
+                        return ResponseEntity.badRequest().body(
+                                "Release must be approved before starting canary"
+                        );
+                    }
+
+                    release.setStatus("CANARY");
+
+                    Release updatedRelease = releaseRepository.save(release);
+
+AuditLog auditLog = new AuditLog(
+        "CANARY_STARTED",
+        updatedRelease.getServiceName(),
+        updatedRelease.getVersion(),
+        "Canary deployment started"
+);
+
+auditLogRepository.save(auditLog);
+
+return ResponseEntity.ok(updatedRelease);
+                })
+                .orElseGet(() ->
+                        ResponseEntity.notFound().build()
+                );
     }
 
     // Request class
@@ -79,78 +142,4 @@ public class ReleaseController {
             this.version = version;
         }
     }
-
-    // Release class
-    public static class Release {
-
-        private int id;
-        private String serviceName;
-        private String version;
-        private String status;
-        private boolean approved;
-
-        public Release(
-                int id,
-                String serviceName,
-                String version,
-                String status,
-                boolean approved) {
-
-            this.id = id;
-            this.serviceName = serviceName;
-            this.version = version;
-            this.status = status;
-            this.approved = approved;
-        }
-
-        public int getId() {
-            return id;
-        }
-
-        public String getServiceName() {
-            return serviceName;
-        }
-
-        public String getVersion() {
-            return version;
-        }
-
-        public String getStatus() {
-            return status;
-        }
-
-        public boolean isApproved() {
-            return approved;
-        }
-
-        public void setStatus(String status) {
-            this.status = status;
-        }
-
-        public void setApproved(boolean approved) {
-            this.approved = approved;
-        }
-    }
-     @PostMapping("/{id}/canary")
-    public ResponseEntity<?> startCanary(
-        @PathVariable int id) {
-
-    for (Release release : releases) {
-
-        if (release.getId() == id) {
-
-            if (!release.isApproved()) {
-                return ResponseEntity.badRequest().body(
-                        "Release must be approved before starting canary"
-                );
-            }
-
-            release.setStatus("CANARY");
-
-            return ResponseEntity.ok(release);
-        }
-    }
-
-    return ResponseEntity.notFound().build();
-}   
 }

@@ -1,5 +1,8 @@
 package com.progressivedelivery.backend.controller;
 
+import com.progressivedelivery.backend.model.Traffic;
+import com.progressivedelivery.backend.repository.TrafficRepository;
+
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -7,15 +10,33 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api")
 public class TrafficController {
 
-    private int stableTraffic = 100;
-    private int canaryTraffic = 0;
+    private final TrafficRepository trafficRepository;
+
+    public TrafficController(TrafficRepository trafficRepository) {
+        this.trafficRepository = trafficRepository;
+    }
 
     @GetMapping("/traffic")
-    public TrafficResponse getTraffic() {
-        return new TrafficResponse(
-                stableTraffic,
-                canaryTraffic,
-                "Traffic configuration retrieved successfully"
+    public ResponseEntity<?> getTraffic() {
+
+        Traffic traffic;
+
+        if (trafficRepository.count() == 0) {
+
+            traffic = new Traffic(100, 0);
+            traffic = trafficRepository.save(traffic);
+
+        } else {
+
+            traffic = trafficRepository.findAll().get(0);
+        }
+
+        return ResponseEntity.ok(
+                new TrafficResponse(
+                        traffic.getStableTraffic(),
+                        traffic.getCanaryTraffic(),
+                        "Traffic configuration retrieved successfully"
+                )
         );
     }
 
@@ -37,18 +58,32 @@ public class TrafficController {
 
         // Stable + Canary must equal 100%
         if (stable + canary != 100) {
+
             return ResponseEntity.badRequest().body(
                     "Stable traffic + Canary traffic must equal 100%"
             );
         }
 
-        stableTraffic = stable;
-        canaryTraffic = canary;
+        Traffic traffic;
+
+        if (trafficRepository.count() == 0) {
+
+            traffic = new Traffic(stable, canary);
+
+        } else {
+
+            traffic = trafficRepository.findAll().get(0);
+
+            traffic.setStableTraffic(stable);
+            traffic.setCanaryTraffic(canary);
+        }
+
+        Traffic savedTraffic = trafficRepository.save(traffic);
 
         return ResponseEntity.ok(
                 new TrafficResponse(
-                        stableTraffic,
-                        canaryTraffic,
+                        savedTraffic.getStableTraffic(),
+                        savedTraffic.getCanaryTraffic(),
                         "Traffic updated successfully"
                 )
         );

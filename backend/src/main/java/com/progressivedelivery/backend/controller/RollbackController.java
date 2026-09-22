@@ -1,5 +1,8 @@
 package com.progressivedelivery.backend.controller;
 
+import com.progressivedelivery.backend.model.Rollback;
+import com.progressivedelivery.backend.repository.RollbackRepository;
+
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -7,38 +10,76 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api")
 public class RollbackController {
 
-    private String currentVersion = "v2.0";
-    private String status = "CANARY";
+    private final RollbackRepository rollbackRepository;
 
+    public RollbackController(RollbackRepository rollbackRepository) {
+        this.rollbackRepository = rollbackRepository;
+    }
+
+    // Get current rollback status
     @GetMapping("/rollback/status")
-    public RollbackResponse getRollbackStatus() {
+    public ResponseEntity<RollbackResponse> getRollbackStatus() {
 
-        return new RollbackResponse(
-                currentVersion,
-                status,
-                "Current deployment status"
+        Rollback rollback;
+
+        if (rollbackRepository.count() == 0) {
+
+            rollback = new Rollback("v2.0", "CANARY");
+            rollback = rollbackRepository.save(rollback);
+
+        } else {
+
+            rollback = rollbackRepository.findAll().get(0);
+        }
+
+        return ResponseEntity.ok(
+                new RollbackResponse(
+                        rollback.getCurrentVersion(),
+                        rollback.getStatus(),
+                        "Current deployment status"
+                )
         );
     }
 
+    // Perform rollback
     @PostMapping("/rollback")
     public ResponseEntity<RollbackResponse> rollback(
             @RequestBody RollbackRequest request) {
 
-        // Store the version that is currently running
-        String previousVersion = currentVersion;
+        Rollback rollback;
 
-        // Roll back to the requested stable version
-        currentVersion = request.getTargetVersion();
-        status = "ROLLED_BACK";
+        if (rollbackRepository.count() == 0) {
 
-        RollbackResponse response = new RollbackResponse(
-                currentVersion,
-                status,
-                "Rollback completed successfully from "
-                        + previousVersion
-                        + " to "
-                        + currentVersion
-        );
+            rollback = new Rollback("v2.0", "CANARY");
+            rollback = rollbackRepository.save(rollback);
+
+        } else {
+
+            rollback = rollbackRepository.findAll().get(0);
+        }
+
+        // Store current version before rollback
+        String previousVersion =
+                rollback.getCurrentVersion();
+
+        // Roll back to requested version
+        rollback.setCurrentVersion(
+                request.getTargetVersion());
+
+        rollback.setStatus("ROLLED_BACK");
+
+        Rollback savedRollback =
+                rollbackRepository.save(rollback);
+
+        RollbackResponse response =
+                new RollbackResponse(
+                        savedRollback.getCurrentVersion(),
+                        savedRollback.getStatus(),
+                        "Rollback completed successfully from "
+                                + previousVersion
+                                + " to "
+                                + savedRollback.getCurrentVersion()
+                );
 
         return ResponseEntity.ok(response);
     }
