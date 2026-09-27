@@ -148,7 +148,7 @@ public class MetricsController {
         }
     }
     @GetMapping("/canary-test")
-public ResponseEntity<String> canaryTest() {
+    public ResponseEntity<String> canaryTest() {
 
     Timer timer = canaryMetricsService.getRequestTimer(
             "canary",
@@ -204,7 +204,7 @@ public ResponseEntity<String> canaryTest() {
         );
     }
     @GetMapping("/prometheus/analyze")
-public ResponseEntity<String> analyzeCanary() {
+    public ResponseEntity<String> analyzeCanary() {
 
     double stableLatency =
             prometheusService.getAverageLatency("stable");
@@ -223,5 +223,59 @@ public ResponseEntity<String> analyzeCanary() {
             "Latency regression: " + latencyRegression;
 
     return ResponseEntity.ok(result);
+    }
+    @GetMapping("/prometheus/summary")
+    public ResponseEntity<?> prometheusSummary() {
+
+    try {
+        double stableLatency =
+                prometheusService.getAverageLatency("stable");
+
+        double canaryLatency =
+                prometheusService.getAverageLatency("canary");
+
+        return ResponseEntity.ok(
+                new PrometheusSummaryResponse(
+                        stableLatency,
+                        canaryLatency
+                )
+        );
+
+    } catch (Exception e) {
+
+        return ResponseEntity.internalServerError().body(
+                "Unable to retrieve Prometheus metrics: "
+                        + e.getMessage()
+        );
+    }
 }
+
+    public static class PrometheusSummaryResponse {
+
+    private double stableLatency;
+    private double canaryLatency;
+
+    public PrometheusSummaryResponse(
+            double stableLatency,
+            double canaryLatency) {
+
+        this.stableLatency = stableLatency;
+        this.canaryLatency = canaryLatency;
+    }
+
+    public double getStableLatency() {
+        return stableLatency;
+    }
+
+    public double getCanaryLatency() {
+        return canaryLatency;
+    }
+    }
+    @GetMapping("/prometheus/debug")
+public ResponseEntity<String> debugPrometheus() {
+
+    return ResponseEntity.ok(
+            prometheusService.debugLatencyQuery("stable")
+    );
+    }
 }

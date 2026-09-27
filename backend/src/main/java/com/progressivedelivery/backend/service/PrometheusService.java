@@ -15,25 +15,31 @@ public class PrometheusService {
     private final RestClient restClient;
 
     public PrometheusService() {
-        this.restClient = RestClient.builder()
-                .baseUrl("http://127.0.0.1:9090")
-                .build();
+    String prometheusUrl =
+            System.getenv().getOrDefault(
+                    "PROMETHEUS_URL",
+                    "http://127.0.0.1:9090"
+
+            );
+
+    this.restClient = RestClient.builder()
+            .baseUrl(prometheusUrl)
+            .build();
     }
 
     public String query(String promql) {
 
-        URI uri = UriComponentsBuilder
-                .fromPath("/api/v1/query")
-                .queryParam("query", promql)
-                .build()
-                .encode()
-                .toUri();
+    URI uri = UriComponentsBuilder
+            .fromUriString("/api/v1/query")
+            .queryParam("query", promql)
+            .build()
+            .toUri();
 
-        return restClient.get()
-                .uri(uri)
-                .retrieve()
-                .body(String.class);
-    }
+    return restClient.get()
+            .uri(uri)
+            .retrieve()
+            .body(String.class);
+}
     public String getCanaryLatency() {
 
         String query =
@@ -55,49 +61,61 @@ public class PrometheusService {
 
         return query(query);
     }
-    public double getAverageLatency(String role) {
+     public double getAverageLatency(String role) {
 
-    String query =
+    String promql =
             "canary_http_request_duration_seconds_sum" +
-            "{deployment_role=\"" + role + "\"}" +
-            " / " +
-            "canary_http_request_duration_seconds_count" +
             "{deployment_role=\"" + role + "\"}";
 
-    String response = query(query);
+    String response = query(promql);
 
     try {
-        ObjectMapper objectMapper = new ObjectMapper();
+
+        ObjectMapper objectMapper =
+                new ObjectMapper();
 
         JsonNode root = objectMapper.readTree(response);
 
         JsonNode result =
-                root.path("data").path("result");
+                root.get("data").get("result");
 
-        if (!result.isArray() || result.isEmpty()) {
+        if (result == null || result.isEmpty()) {
             throw new RuntimeException(
                     "No Prometheus data found for role: " + role
             );
         }
 
-        JsonNode value =
-                result.get(0).path("value");
+        JsonNode firstResult = result.get(0);
 
-        if (!value.isArray() || value.size() < 2) {
+        JsonNode value = firstResult.get("value");
+
+        if (value == null || value.size() < 2) {
             throw new RuntimeException(
-                    "Invalid Prometheus response for role: " + role
+                    "Invalid Prometheus value for role: " + role
             );
         }
 
-        return value.get(1).asDouble();
+        String latencyValue =
+                value.get(1).asText();
 
-        } catch (Exception e) {
+        return Double.parseDouble(latencyValue);
 
-            throw new RuntimeException(
+    } catch (Exception e) {
+
+        throw new RuntimeException(
                 "Unable to read latency from Prometheus for role: "
-                        + role,
+                        + role +
+                        ". Response: " + response,
                 e
-            );
-        }
+        );
+    }
+    }
+    public String debugLatencyQuery(String role) {
+
+    String promql =
+            "canary_http_request_duration_seconds_sum" +
+            "{deployment_role=\"" + role + "\"}";
+
+    return query(promql);
     }
 }

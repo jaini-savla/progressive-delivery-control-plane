@@ -60,7 +60,8 @@ return ResponseEntity.ok(savedRelease);
     // Approve a release
     @PostMapping("/{id}/approve")
     public ResponseEntity<?> approveRelease(
-            @PathVariable Integer id) {
+            @PathVariable Integer id) 
+            {
 
         return releaseRepository.findById(id)
                 .map(release -> {
@@ -85,6 +86,7 @@ return ResponseEntity.ok(updatedRelease);
                         ResponseEntity.notFound().build()
                 );
     }
+    
 
     // Start canary deployment
     @PostMapping("/{id}/canary")
