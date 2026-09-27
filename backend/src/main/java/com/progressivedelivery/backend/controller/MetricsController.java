@@ -2,14 +2,15 @@ package com.progressivedelivery.backend.controller;
 
 import com.progressivedelivery.backend.model.Metrics;
 import com.progressivedelivery.backend.repository.MetricsRepository;
+import com.progressivedelivery.backend.service.CanaryMetricsService;
+import com.progressivedelivery.backend.service.PrometheusService;
+
+import io.micrometer.core.instrument.Timer;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import com.progressivedelivery.backend.service.CanaryMetricsService;
-import io.micrometer.core.instrument.Timer;
-import com.progressivedelivery.backend.service.PrometheusService;
 
 @RestController
 @RequestMapping("/api/metrics")
@@ -20,22 +21,28 @@ public class MetricsController {
     private final PrometheusService prometheusService;
 
     public MetricsController(
-        MetricsRepository metricsRepository,
-        CanaryMetricsService canaryMetricsService,
-        PrometheusService prometheusService) {
+            MetricsRepository metricsRepository,
+            CanaryMetricsService canaryMetricsService,
+            PrometheusService prometheusService) {
 
         this.metricsRepository = metricsRepository;
         this.canaryMetricsService = canaryMetricsService;
         this.prometheusService = prometheusService;
     }
 
-    // Get all metrics
+    // =========================================================
+    // GET ALL METRICS
+    // =========================================================
+
     @GetMapping
     public List<Metrics> getMetrics() {
         return metricsRepository.findAll();
     }
 
-    // Get latest metrics
+    // =========================================================
+    // GET LATEST METRICS
+    // =========================================================
+
     @GetMapping("/latest")
     public ResponseEntity<?> getLatestMetrics() {
 
@@ -63,7 +70,10 @@ public class MetricsController {
         return ResponseEntity.ok(latest);
     }
 
-    // Add new metrics
+    // =========================================================
+    // CREATE METRICS
+    // =========================================================
+
     @PostMapping
     public ResponseEntity<?> createMetrics(
             @RequestBody MetricsRequest request) {
@@ -107,7 +117,10 @@ public class MetricsController {
         return ResponseEntity.ok(savedMetrics);
     }
 
-    // Request class
+    // =========================================================
+    // REQUEST CLASS
+    // =========================================================
+
     public static class MetricsRequest {
 
         private double errorRate;
@@ -147,87 +160,143 @@ public class MetricsController {
             this.deploymentStatus = deploymentStatus;
         }
     }
+
+    // =========================================================
+    // CANARY TEST
+    // =========================================================
+
     @GetMapping("/canary-test")
     public ResponseEntity<String> canaryTest() {
 
-    Timer timer = canaryMetricsService.getRequestTimer(
-            "canary",
-            "v2.0"
-    );
-
-    Timer.Sample sample = Timer.start();
-
-    try {
-        Thread.sleep(100);
-    } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-    } finally {
-        sample.stop(timer);
-    }
-
-    return ResponseEntity.ok("Canary test request completed");
-    }
-    @GetMapping("/stable-test")
-    public ResponseEntity<String> stableTest() {
-
         Timer timer = canaryMetricsService.getRequestTimer(
-            "stable",
-            "v1.0"
+                "canary",
+                "v2.0"
         );
 
         Timer.Sample sample = Timer.start();
 
         try {
-        Thread.sleep(80);
+
+            Thread.sleep(100);
+
         } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
+
+            Thread.currentThread().interrupt();
+
         } finally {
-        sample.stop(timer);
+
+            sample.stop(timer);
         }
 
-        return ResponseEntity.ok("Stable test request completed");
+        return ResponseEntity.ok(
+                "Canary test request completed"
+        );
     }
-    @GetMapping("/prometheus-test")
-        public ResponseEntity<String> prometheusTest() {
 
-        String result = prometheusService.query(
-            "up{job=\"spring-boot-backend\"}"
+    // =========================================================
+    // STABLE TEST
+    // =========================================================
+
+    @GetMapping("/stable-test")
+    public ResponseEntity<String> stableTest() {
+
+        Timer timer = canaryMetricsService.getRequestTimer(
+                "stable",
+                "v1.0"
         );
 
-        return ResponseEntity.ok(result);
+        Timer.Sample sample = Timer.start();
+
+        try {
+
+            Thread.sleep(80);
+
+        } catch (InterruptedException e) {
+
+            Thread.currentThread().interrupt();
+
+        } finally {
+
+            sample.stop(timer);
+        }
+
+        return ResponseEntity.ok(
+                "Stable test request completed"
+        );
     }
+
+    // =========================================================
+    // PROMETHEUS TEST
+    // =========================================================
+
+    @GetMapping("/prometheus-test")
+    public ResponseEntity<String> prometheusTest() {
+
+        try {
+
+            String result = prometheusService.query(
+                    "up{job=\"spring-boot-backend\"}"
+            );
+
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+
+            return ResponseEntity.ok(
+                    "{\"status\":\"unavailable\",\"message\":\"Prometheus is not available\"}"
+            );
+        }
+    }
+
+    // =========================================================
+    // CANARY LATENCY
+    // =========================================================
+
     @GetMapping("/prometheus/canary-latency")
     public ResponseEntity<String> canaryLatency() {
 
         return ResponseEntity.ok(
-            prometheusService.getCanaryLatency()
+                prometheusService.getCanaryLatency()
         );
     }
+
+    // =========================================================
+    // PROMETHEUS ANALYSIS
+    // =========================================================
+
     @GetMapping("/prometheus/analyze")
     public ResponseEntity<String> analyzeCanary() {
 
-    double stableLatency =
-            prometheusService.getAverageLatency("stable");
+        double stableLatency =
+                prometheusService.getAverageLatency("stable");
 
-    double canaryLatency =
-            prometheusService.getAverageLatency("canary");
+        double canaryLatency =
+                prometheusService.getAverageLatency("canary");
 
-    boolean latencyRegression =
-            canaryLatency > stableLatency * 1.5;
+        boolean latencyRegression =
+                stableLatency > 0 &&
+                canaryLatency > stableLatency * 1.5;
 
-    String result =
-            "Stable latency: " + stableLatency +
-            " seconds\n" +
-            "Canary latency: " + canaryLatency +
-            " seconds\n" +
-            "Latency regression: " + latencyRegression;
+        String result =
+                "Stable latency: " + stableLatency +
+                " seconds\n" +
 
-    return ResponseEntity.ok(result);
+                "Canary latency: " + canaryLatency +
+                " seconds\n" +
+
+                "Latency regression: " +
+                latencyRegression;
+
+        return ResponseEntity.ok(result);
     }
+
+    // =========================================================
+    // PROMETHEUS SUMMARY
+    // =========================================================
+
     @GetMapping("/prometheus/summary")
     public ResponseEntity<?> prometheusSummary() {
 
-    try {
         double stableLatency =
                 prometheusService.getAverageLatency("stable");
 
@@ -240,42 +309,53 @@ public class MetricsController {
                         canaryLatency
                 )
         );
-
-    } catch (Exception e) {
-
-        return ResponseEntity.internalServerError().body(
-                "Unable to retrieve Prometheus metrics: "
-                        + e.getMessage()
-        );
     }
-}
+
+    // =========================================================
+    // PROMETHEUS SUMMARY RESPONSE
+    // =========================================================
 
     public static class PrometheusSummaryResponse {
 
-    private double stableLatency;
-    private double canaryLatency;
+        private double stableLatency;
+        private double canaryLatency;
 
-    public PrometheusSummaryResponse(
-            double stableLatency,
-            double canaryLatency) {
+        public PrometheusSummaryResponse(
+                double stableLatency,
+                double canaryLatency) {
 
-        this.stableLatency = stableLatency;
-        this.canaryLatency = canaryLatency;
+            this.stableLatency = stableLatency;
+            this.canaryLatency = canaryLatency;
+        }
+
+        public double getStableLatency() {
+            return stableLatency;
+        }
+
+        public double getCanaryLatency() {
+            return canaryLatency;
+        }
     }
 
-    public double getStableLatency() {
-        return stableLatency;
-    }
+    // =========================================================
+    // PROMETHEUS DEBUG
+    // =========================================================
 
-    public double getCanaryLatency() {
-        return canaryLatency;
-    }
-    }
     @GetMapping("/prometheus/debug")
-public ResponseEntity<String> debugPrometheus() {
+    public ResponseEntity<String> debugPrometheus() {
 
-    return ResponseEntity.ok(
-            prometheusService.debugLatencyQuery("stable")
-    );
+        try {
+
+            return ResponseEntity.ok(
+                    prometheusService.debugLatencyQuery("stable")
+            );
+
+        } catch (Exception e) {
+
+            return ResponseEntity.ok(
+                    "Prometheus debug unavailable: " +
+                    e.getMessage()
+            );
+        }
     }
 }
