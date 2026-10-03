@@ -1,0 +1,22 @@
+/* Minimal global reset – replaces the Vite starter styles.
+   The old file set `#root { text-align: center; width: 1126px; ... }`
+   which centered every page and broke the layout. */
+
+:root {
+  font-family: Arial, Helvetica, sans-serif;
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+  text-align: left;
+}
+
+a {
+  text-decoration: none;
+}
