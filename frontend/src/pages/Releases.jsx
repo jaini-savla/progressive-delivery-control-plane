@@ -1,34 +1,13 @@
 import { useEffect, useState } from "react";
 import { addAuditLog } from "../utils/auditLogger";
+import API_BASE_URL from "../utils/api";
 
 const STORAGE_KEY = "progressiveDeliveryReleases";
-
-const initialReleases = [
-  {
-    id: 1,
-    application: "Payment Service",
-    previousVersion: "v2.4.1",
-    newVersion: "v2.5.0",
-    traffic: 10,
-    status: "Canary Running",
-    approval: "Approved",
-    description: "New payment processing improvements",
-  },
-  {
-    id: 2,
-    application: "Order Service",
-    previousVersion: "v1.8.1",
-    newVersion: "v1.8.2",
-    traffic: 100,
-    status: "Completed",
-    approval: "Approved",
-    description: "Bug fixes and order improvements",
-  },
-];
 
 function Releases() {
   const [releases, setReleases] = useState([]);
   const [showForm, setShowForm] = useState(false);
+  const [message, setMessage] = useState("");
 
   const [formData, setFormData] = useState({
     application: "Payment Service",
@@ -38,21 +17,88 @@ function Releases() {
     description: "",
   });
 
-  const [message, setMessage] = useState("");
+  // =========================================================
+  // LOAD RELEASES
+  // =========================================================
 
   useEffect(() => {
-    const savedReleases = localStorage.getItem(STORAGE_KEY);
+    const loadReleases = async () => {
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/releases`
+        );
 
-    if (savedReleases) {
-      setReleases(JSON.parse(savedReleases));
-    } else {
-      setReleases(initialReleases);
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify(initialReleases)
-      );
-    }
+        if (!response.ok) {
+          throw new Error("Failed to fetch releases");
+        }
+
+        const data = await response.json();
+
+        const formattedReleases = data.map((release) => ({
+          id: release.id,
+          application: release.serviceName,
+          previousVersion: release.previousVersion || "",
+          newVersion: release.version,
+          traffic:
+            release.status === "CANARY" ||
+            release.status === "Canary Running"
+              ? 10
+              : release.status === "COMPLETED" ||
+                release.status === "Completed"
+              ? 100
+              : 0,
+          status: formatStatus(release.status),
+          approval: release.approved ? "Approved" : "Pending",
+          description: release.description || "",
+        }));
+
+        setReleases(formattedReleases);
+      } catch (error) {
+        console.error("Unable to load releases:", error);
+
+        setMessage(
+          "Unable to load releases from the backend."
+        );
+      }
+    };
+
+    loadReleases();
   }, []);
+
+  // =========================================================
+  // STATUS FORMATTER
+  // =========================================================
+
+  const formatStatus = (status) => {
+    if (!status) return "Created";
+
+    switch (status.toUpperCase()) {
+      case "CREATED":
+        return "Created";
+
+      case "APPROVED":
+        return "Approved";
+
+      case "CANARY":
+        return "Canary Running";
+
+      case "COMPLETED":
+        return "Completed";
+
+      case "REJECTED":
+        return "Rejected";
+
+      case "ROLLED_BACK":
+        return "Rolled Back";
+
+      default:
+        return status;
+    }
+  };
+
+  // =========================================================
+  // SAVE LOCAL RELEASES
+  // =========================================================
 
   const saveReleases = (updatedReleases) => {
     setReleases(updatedReleases);
@@ -63,113 +109,348 @@ function Releases() {
     );
   };
 
-  // --------------------------------------------------
+  // =========================================================
   // CREATE RELEASE
-  // --------------------------------------------------
+  // =========================================================
 
-  const handleCreateRelease = (e) => {
+  const handleCreateRelease = async (e) => {
     e.preventDefault();
 
     if (
       !formData.application ||
-      !formData.previousVersion ||
       !formData.newVersion
     ) {
-      setMessage("Please fill all required fields.");
+      setMessage(
+        "Please enter an application and new version."
+      );
       return;
     }
 
-    const newRelease = {
-      id: Date.now(),
-      application: formData.application,
-      previousVersion: formData.previousVersion,
-      newVersion: formData.newVersion,
-      traffic: Number(formData.traffic),
-      status: "Pending Approval",
-      approval: "Pending",
-      description: formData.description,
-    };
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/releases`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            serviceName: formData.application,
+            version: formData.newVersion,
+          }),
+        }
+      );
 
-    const updatedReleases = [
-      newRelease,
-      ...releases,
-    ];
+      if (!response.ok) {
+        const errorText = await response.text();
 
-    saveReleases(updatedReleases);
+        throw new Error(
+          errorText || "Failed to create release"
+        );
+      }
 
-    addAuditLog(
-      "Created Release",
-      `${formData.application} ${formData.newVersion}`,
-      "Success",
-      "Admin"
-    );
+      const createdRelease = await response.json();
 
-    setMessage(
-      `Release ${formData.newVersion} created and sent for approval.`
-    );
+      const formattedRelease = {
+        id: createdRelease.id,
+        application: createdRelease.serviceName,
+        previousVersion: formData.previousVersion,
+        newVersion: createdRelease.version,
+        traffic: 0,
+        status: formatStatus(createdRelease.status),
+        approval: createdRelease.approved
+          ? "Approved"
+          : "Pending",
+        description: formData.description,
+      };
 
-    setFormData({
-      application: "Payment Service",
-      previousVersion: "",
-      newVersion: "",
-      traffic: 10,
-      description: "",
-    });
+      setReleases((current) => [
+        formattedRelease,
+        ...current,
+      ]);
 
-    setShowForm(false);
+      addAuditLog(
+        "Created Release",
+        `${formData.application} ${formData.newVersion}`,
+        "Success",
+        "Admin"
+      );
+
+      setMessage(
+        `Release ${formData.newVersion} created and sent for approval.`
+      );
+
+      setFormData({
+        application: "Payment Service",
+        previousVersion: "",
+        newVersion: "",
+        traffic: 10,
+        description: "",
+      });
+
+      setShowForm(false);
+    } catch (error) {
+      console.error(
+        "Unable to create release:",
+        error
+      );
+
+      setMessage(
+        "Unable to create release. Please try again."
+      );
+    }
   };
 
-  // --------------------------------------------------
+  // =========================================================
   // APPROVE RELEASE
-  // --------------------------------------------------
+  // =========================================================
 
-  const approveRelease = (id) => {
-    const release = releases.find((r) => r.id === id);
+  const approveRelease = async (id) => {
+    const release = releases.find(
+      (r) => r.id === id
+    );
 
     if (!release) return;
 
-    const updatedReleases = releases.map((r) =>
-      r.id === id
-        ? {
-            ...r,
-            approval: "Approved",
-            status: "Canary Running",
-          }
-        : r
-    );
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/releases/${id}/approve`,
+        {
+          method: "POST",
+        }
+      );
 
-    saveReleases(updatedReleases);
+      if (!response.ok) {
+        throw new Error(
+          "Failed to approve release"
+        );
+      }
 
-    addAuditLog(
-      "Approved Release",
-      `${release.application} ${release.newVersion}`,
-      "Success",
-      "Release Manager"
-    );
+      const updatedRelease =
+        await response.json();
 
-    setMessage(
-      `${release.application} ${release.newVersion} has been approved.`
-    );
+      const updatedReleases = releases.map(
+        (r) =>
+          r.id === id
+            ? {
+                ...r,
+                application:
+                  updatedRelease.serviceName,
+                newVersion:
+                  updatedRelease.version,
+                status: formatStatus(
+                  updatedRelease.status
+                ),
+                approval:
+                  updatedRelease.approved
+                    ? "Approved"
+                    : "Pending",
+              }
+            : r
+      );
+
+      setReleases(updatedReleases);
+
+      addAuditLog(
+        "Approved Release",
+        `${release.application} ${release.newVersion}`,
+        "Success",
+        "Release Manager"
+      );
+
+      setMessage(
+        `${release.application} ${release.newVersion} has been approved.`
+      );
+    } catch (error) {
+      console.error(
+        "Unable to approve release:",
+        error
+      );
+
+      setMessage(
+        "Unable to approve release. Please try again."
+      );
+    }
   };
 
-  // --------------------------------------------------
-  // REJECT RELEASE
-  // --------------------------------------------------
+  // =========================================================
+  // START CANARY
+  // =========================================================
+
+  const startCanary = async (id) => {
+    const release = releases.find(
+      (r) => r.id === id
+    );
+
+    if (!release) return;
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/releases/${id}/canary`,
+        {
+          method: "POST",
+        }
+      );
+
+      if (!response.ok) {
+        const errorText =
+          await response.text();
+
+        throw new Error(
+          errorText || "Failed to start canary"
+        );
+      }
+
+      const updatedRelease =
+        await response.json();
+
+      const updatedReleases = releases.map(
+        (r) =>
+          r.id === id
+            ? {
+                ...r,
+                status: formatStatus(
+                  updatedRelease.status
+                ),
+                approval:
+                  updatedRelease.approved
+                    ? "Approved"
+                    : "Pending",
+                traffic: 10,
+              }
+            : r
+      );
+
+      setReleases(updatedReleases);
+
+      addAuditLog(
+        "Started Canary",
+        `${release.application} ${release.newVersion}`,
+        "Success",
+        "System"
+      );
+
+      setMessage(
+        `${release.application} ${release.newVersion} canary deployment started.`
+      );
+    } catch (error) {
+      console.error(
+        "Unable to start canary:",
+        error
+      );
+
+      setMessage(
+        "Unable to start canary. Please try again."
+      );
+    }
+  };
+
+  // =========================================================
+  // UPDATE TRAFFIC
+  // =========================================================
+
+  const setTraffic = async (
+    id,
+    canaryTraffic
+  ) => {
+    const release = releases.find(
+      (r) => r.id === id
+    );
+
+    if (!release) return;
+
+    const stableTraffic =
+      100 - canaryTraffic;
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/traffic`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            stableTraffic,
+            canaryTraffic,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorText =
+          await response.text();
+
+        throw new Error(
+          errorText ||
+            "Failed to update traffic"
+        );
+      }
+
+      const trafficData =
+        await response.json();
+
+      const updatedReleases =
+        releases.map((r) =>
+          r.id === id
+            ? {
+                ...r,
+                traffic:
+                  trafficData.canaryTraffic,
+                status:
+                  trafficData.canaryTraffic ===
+                  100
+                    ? "Completed"
+                    : "Canary Running",
+              }
+            : r
+        );
+
+      setReleases(updatedReleases);
+
+      addAuditLog(
+        "Updated Canary Traffic",
+        `${release.application} → ${trafficData.canaryTraffic}%`,
+        "Success",
+        "System"
+      );
+
+      setMessage(
+        `${release.application} traffic updated to ${trafficData.canaryTraffic}% canary.`
+      );
+    } catch (error) {
+      console.error(
+        "Unable to update traffic:",
+        error
+      );
+
+      setMessage(
+        "Unable to update traffic. Please try again."
+      );
+    }
+  };
+
+  // =========================================================
+  // REJECT
+  // =========================================================
 
   const rejectRelease = (id) => {
-    const release = releases.find((r) => r.id === id);
+    const release = releases.find(
+      (r) => r.id === id
+    );
 
     if (!release) return;
 
-    const updatedReleases = releases.map((r) =>
-      r.id === id
-        ? {
-            ...r,
-            approval: "Rejected",
-            status: "Rejected",
-            traffic: 0,
-          }
-        : r
+    const updatedReleases = releases.map(
+      (r) =>
+        r.id === id
+          ? {
+              ...r,
+              approval: "Rejected",
+              status: "Rejected",
+              traffic: 0,
+            }
+          : r
     );
 
     saveReleases(updatedReleases);
@@ -186,12 +467,14 @@ function Releases() {
     );
   };
 
-  // --------------------------------------------------
-  // INCREASE CANARY TRAFFIC
-  // --------------------------------------------------
+  // =========================================================
+  // INCREASE TRAFFIC
+  // =========================================================
 
-  const increaseTraffic = (id) => {
-    const release = releases.find((r) => r.id === id);
+  const increaseTraffic = async (id) => {
+    const release = releases.find(
+      (r) => r.id === id
+    );
 
     if (!release) return;
 
@@ -205,45 +488,17 @@ function Releases() {
       nextTraffic = 100;
     }
 
-    const updatedReleases = releases.map((r) =>
-      r.id === id
-        ? {
-            ...r,
-            traffic: nextTraffic,
-            status:
-              nextTraffic === 100
-                ? "Completed"
-                : "Canary Running",
-          }
-        : r
-    );
-
-    saveReleases(updatedReleases);
-
-    addAuditLog(
-      "Increased Canary Traffic",
-      `${release.application} → ${nextTraffic}%`,
-      "Success",
-      "System"
-    );
-
-    if (nextTraffic === 100) {
-      setMessage(
-        `${release.application} promoted to 100% traffic. Release completed.`
-      );
-    } else {
-      setMessage(
-        `${release.application} canary traffic increased to ${nextTraffic}%.`
-      );
-    }
+    await setTraffic(id, nextTraffic);
   };
 
-  // --------------------------------------------------
-  // ROLLBACK RELEASE
-  // --------------------------------------------------
+  // =========================================================
+  // ROLLBACK
+  // =========================================================
 
-  const rollbackRelease = (id) => {
-    const release = releases.find((r) => r.id === id);
+  const rollbackRelease = async (id) => {
+    const release = releases.find(
+      (r) => r.id === id
+    );
 
     if (!release) return;
 
@@ -253,36 +508,78 @@ function Releases() {
 
     if (!confirmed) return;
 
-    const updatedReleases = releases.map((r) =>
-      r.id === id
-        ? {
-            ...r,
-            traffic: 0,
-            status: "Rolled Back",
-          }
-        : r
-    );
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/rollback`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            targetVersion:
+              release.previousVersion ||
+              "v1.0",
+          }),
+        }
+      );
 
-    saveReleases(updatedReleases);
+      if (!response.ok) {
+        const errorText =
+          await response.text();
 
-    addAuditLog(
-      "Rolled Back Release",
-      `${release.application} ${release.newVersion}`,
-      "Warning",
-      "System"
-    );
+        throw new Error(
+          errorText ||
+            "Failed to rollback release"
+        );
+      }
 
-    setMessage(
-      `${release.application} ${release.newVersion} has been rolled back.`
-    );
+      const rollbackData =
+        await response.json();
+
+      const updatedReleases =
+        releases.map((r) =>
+          r.id === id
+            ? {
+                ...r,
+                traffic: 0,
+                status: "Rolled Back",
+              }
+            : r
+        );
+
+      setReleases(updatedReleases);
+
+      addAuditLog(
+        "Rolled Back Release",
+        `${release.application} ${release.newVersion}`,
+        "Warning",
+        "System"
+      );
+
+      setMessage(
+        `${release.application} ${release.newVersion} rolled back to ${rollbackData.currentVersion}.`
+      );
+    } catch (error) {
+      console.error(
+        "Unable to rollback release:",
+        error
+      );
+
+      setMessage(
+        "Unable to rollback release. Please try again."
+      );
+    }
   };
 
-  // --------------------------------------------------
-  // PROMOTE FROM ANALYTICS
-  // --------------------------------------------------
+  // =========================================================
+  // PROMOTE
+  // =========================================================
 
   const promoteFromAnalytics = (id) => {
-    const release = releases.find((r) => r.id === id);
+    const release = releases.find(
+      (r) => r.id === id
+    );
 
     if (!release) return;
 
@@ -293,14 +590,15 @@ function Releases() {
       return;
     }
 
-    const updatedReleases = releases.map((r) =>
-      r.id === id
-        ? {
-            ...r,
-            traffic: 100,
-            status: "Completed",
-          }
-        : r
+    const updatedReleases = releases.map(
+      (r) =>
+        r.id === id
+          ? {
+              ...r,
+              traffic: 100,
+              status: "Completed",
+            }
+          : r
     );
 
     saveReleases(updatedReleases);
@@ -317,23 +615,26 @@ function Releases() {
     );
   };
 
-  // --------------------------------------------------
-  // ROLLBACK FROM ANALYTICS
-  // --------------------------------------------------
+  // =========================================================
+  // ANALYTICS ROLLBACK
+  // =========================================================
 
   const rollbackFromAnalytics = (id) => {
-    const release = releases.find((r) => r.id === id);
+    const release = releases.find(
+      (r) => r.id === id
+    );
 
     if (!release) return;
 
-    const updatedReleases = releases.map((r) =>
-      r.id === id
-        ? {
-            ...r,
-            traffic: 0,
-            status: "Rolled Back",
-          }
-        : r
+    const updatedReleases = releases.map(
+      (r) =>
+        r.id === id
+          ? {
+              ...r,
+              traffic: 0,
+              status: "Rolled Back",
+            }
+          : r
     );
 
     saveReleases(updatedReleases);
@@ -350,9 +651,9 @@ function Releases() {
     );
   };
 
-  // --------------------------------------------------
+  // =========================================================
   // FORM CHANGE
-  // --------------------------------------------------
+  // =========================================================
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -363,126 +664,209 @@ function Releases() {
     });
   };
 
-  return (
-    <div className="page-container">
+  // =========================================================
+  // STATUS CLASS
+  // =========================================================
 
-      {/* PAGE HEADER */}
+  const getStatusClass = (status) => {
+    return status
+      .toLowerCase()
+      .replaceAll(" ", "-")
+      .replaceAll("_", "-");
+  };
+
+  // =========================================================
+  // UI
+  // =========================================================
+
+  return (
+    <div className="page-container releases-page">
+
+      {/* HEADER */}
       <div className="page-header">
+
         <div>
           <h1>Releases</h1>
+
           <p>
-            Manage release approvals, canary traffic and rollbacks.
+            Manage release approvals, canary
+            traffic and rollbacks.
           </p>
         </div>
 
         <button
           className="primary-btn"
-          onClick={() => setShowForm(!showForm)}
+          onClick={() =>
+            setShowForm(!showForm)
+          }
         >
-          + New Release
+          {showForm
+            ? "× Close"
+            : "+ New Release"}
         </button>
+
       </div>
 
       {/* MESSAGE */}
       {message && (
-        <div className="success-message">
-          {message}
+        <div className="release-message">
+
+          <span>{message}</span>
+
           <button
-            onClick={() => setMessage("")}
-            className="message-close"
+            onClick={() =>
+              setMessage("")
+            }
           >
             ×
           </button>
+
         </div>
       )}
 
-      {/* CREATE RELEASE FORM */}
+      {/* CREATE FORM */}
       {showForm && (
         <div className="release-form-card">
 
           <div className="form-header">
+
             <div>
               <h2>Create New Release</h2>
+
               <p>
-                Submit a new application version for approval.
+                Submit a new application version
+                for approval.
               </p>
             </div>
 
             <button
               className="close-form-btn"
-              onClick={() => setShowForm(false)}
+              onClick={() =>
+                setShowForm(false)
+              }
             >
               ×
             </button>
+
           </div>
 
-          <form onSubmit={handleCreateRelease}>
+          <form
+            onSubmit={handleCreateRelease}
+          >
 
             <div className="form-grid">
 
               <div className="form-group">
-                <label>Application</label>
+
+                <label>
+                  Application
+                </label>
 
                 <select
                   name="application"
-                  value={formData.application}
+                  value={
+                    formData.application
+                  }
                   onChange={handleChange}
                 >
-                  <option>Payment Service</option>
-                  <option>Order Service</option>
-                  <option>User Service</option>
-                  <option>Inventory Service</option>
+                  <option>
+                    Payment Service
+                  </option>
+
+                  <option>
+                    Order Service
+                  </option>
+
+                  <option>
+                    User Service
+                  </option>
+
+                  <option>
+                    Inventory Service
+                  </option>
                 </select>
+
               </div>
 
               <div className="form-group">
-                <label>Previous Version</label>
+
+                <label>
+                  Previous Version
+                </label>
 
                 <input
                   type="text"
                   name="previousVersion"
                   placeholder="e.g. v2.4.1"
-                  value={formData.previousVersion}
+                  value={
+                    formData.previousVersion
+                  }
                   onChange={handleChange}
                 />
+
               </div>
 
               <div className="form-group">
-                <label>New Version</label>
+
+                <label>
+                  New Version *
+                </label>
 
                 <input
                   type="text"
                   name="newVersion"
                   placeholder="e.g. v2.5.0"
-                  value={formData.newVersion}
+                  value={
+                    formData.newVersion
+                  }
                   onChange={handleChange}
+                  required
                 />
+
               </div>
 
               <div className="form-group">
-                <label>Initial Canary Traffic</label>
+
+                <label>
+                  Initial Canary Traffic
+                </label>
 
                 <select
                   name="traffic"
                   value={formData.traffic}
                   onChange={handleChange}
                 >
-                  <option value="10">10%</option>
-                  <option value="25">25%</option>
-                  <option value="50">50%</option>
+                  <option value="10">
+                    10%
+                  </option>
+
+                  <option value="25">
+                    25%
+                  </option>
+
+                  <option value="50">
+                    50%
+                  </option>
                 </select>
+
               </div>
 
               <div className="form-group full-width">
-                <label>Description</label>
+
+                <label>
+                  Description
+                </label>
 
                 <textarea
                   name="description"
                   placeholder="Describe the release..."
-                  value={formData.description}
+                  value={
+                    formData.description
+                  }
                   onChange={handleChange}
                   rows="4"
                 />
+
               </div>
 
             </div>
@@ -492,7 +876,9 @@ function Releases() {
               <button
                 type="button"
                 className="secondary-btn"
-                onClick={() => setShowForm(false)}
+                onClick={() =>
+                  setShowForm(false)
+                }
               >
                 Cancel
               </button>
@@ -507,33 +893,65 @@ function Releases() {
             </div>
 
           </form>
+
         </div>
       )}
 
-      {/* RELEASE LIST */}
+      {/* RELEASE PIPELINE */}
       <div className="release-section">
 
         <div className="section-title">
+
           <div>
             <h2>Release Pipeline</h2>
+
             <p>
-              Current and recent application releases
+              Current and recent application
+              releases
             </p>
           </div>
 
           <span className="release-count">
-            {releases.length} Releases
+            {releases.length}{" "}
+            {releases.length === 1
+              ? "Release"
+              : "Releases"}
           </span>
+
         </div>
 
         <div className="release-list">
 
           {releases.length === 0 ? (
+
             <div className="empty-state">
-              <h3>No releases found</h3>
-              <p>Create your first release to begin.</p>
+
+              <div className="empty-state-icon">
+                ◫
+              </div>
+
+              <h3>
+                No releases found
+              </h3>
+
+              <p>
+                Create your first release
+                to begin.
+              </p>
+
+              <button
+                className="primary-btn"
+                onClick={() =>
+                  setShowForm(true)
+                }
+              >
+                + Create Release
+              </button>
+
             </div>
+
           ) : (
+
             releases.map((release) => (
 
               <div
@@ -541,10 +959,10 @@ function Releases() {
                 key={release.id}
               >
 
-                {/* RELEASE TOP */}
+                {/* TOP */}
                 <div className="release-card-top">
 
-                  <div>
+                  <div className="release-main-info">
 
                     <div className="release-title-row">
 
@@ -553,11 +971,9 @@ function Releases() {
                       </h3>
 
                       <span
-                        className={`status-badge ${
+                        className={`release-status-badge ${getStatusClass(
                           release.status
-                            .toLowerCase()
-                            .replaceAll(" ", "-")
-                        }`}
+                        )}`}
                       >
                         {release.status}
                       </span>
@@ -587,14 +1003,20 @@ function Releases() {
 
                 </div>
 
-                {/* VERSION FLOW */}
+                {/* VERSION */}
                 <div className="version-flow">
 
                   <div className="version-box">
-                    <span>Current</span>
+
+                    <span>
+                      Current
+                    </span>
+
                     <strong>
-                      {release.previousVersion}
+                      {release.previousVersion ||
+                        "—"}
                     </strong>
+
                   </div>
 
                   <div className="version-arrow">
@@ -602,10 +1024,15 @@ function Releases() {
                   </div>
 
                   <div className="version-box new-version">
-                    <span>New Version</span>
+
+                    <span>
+                      New Version
+                    </span>
+
                     <strong>
                       {release.newVersion}
                     </strong>
+
                   </div>
 
                 </div>
@@ -638,45 +1065,30 @@ function Releases() {
 
                   <div className="traffic-stages">
 
-                    <span
-                      className={
-                        release.traffic >= 10
-                          ? "active-stage"
-                          : ""
-                      }
-                    >
-                      10%
-                    </span>
+                    {[10, 25, 50, 100].map(
+                      (stage) => (
 
-                    <span
-                      className={
-                        release.traffic >= 25
-                          ? "active-stage"
-                          : ""
-                      }
-                    >
-                      25%
-                    </span>
+                        <button
+                          key={stage}
+                          type="button"
+                          className={
+                            release.traffic >=
+                            stage
+                              ? "active-stage"
+                              : ""
+                          }
+                          onClick={() =>
+                            setTraffic(
+                              release.id,
+                              stage
+                            )
+                          }
+                        >
+                          {stage}%
+                        </button>
 
-                    <span
-                      className={
-                        release.traffic >= 50
-                          ? "active-stage"
-                          : ""
-                      }
-                    >
-                      50%
-                    </span>
-
-                    <span
-                      className={
-                        release.traffic >= 100
-                          ? "active-stage"
-                          : ""
-                      }
-                    >
-                      100%
-                    </span>
+                      )
+                    )}
 
                   </div>
 
@@ -685,22 +1097,26 @@ function Releases() {
                 {/* ACTIONS */}
                 <div className="release-actions">
 
-                  {/* APPROVAL ACTIONS */}
-                  {release.approval === "Pending" && (
+                  {release.approval ===
+                    "Pending" && (
                     <>
                       <button
-                        className="approve-btn"
+                        className="approve-button"
                         onClick={() =>
-                          approveRelease(release.id)
+                          approveRelease(
+                            release.id
+                          )
                         }
                       >
                         ✓ Approve
                       </button>
 
                       <button
-                        className="reject-btn"
+                        className="reject-button"
                         onClick={() =>
-                          rejectRelease(release.id)
+                          rejectRelease(
+                            release.id
+                          )
                         }
                       >
                         ✕ Reject
@@ -708,74 +1124,95 @@ function Releases() {
                     </>
                   )}
 
-                  {/* CANARY ACTION */}
-                  {release.approval === "Approved" &&
-                    release.status === "Canary Running" &&
-                    release.traffic < 100 && (
+                  {release.approval ===
+                    "Approved" &&
+                    release.status ===
+                      "Approved" && (
                       <button
                         className="primary-btn"
                         onClick={() =>
-                          increaseTraffic(release.id)
+                          startCanary(
+                            release.id
+                          )
                         }
                       >
-                        ↑ Increase Traffic
+                        ▶ Start Canary
                       </button>
                     )}
 
-                  {/* PROMOTE */}
-                  {release.approval === "Approved" &&
-                    release.status === "Canary Running" &&
+                  {release.approval ===
+                    "Approved" &&
+                    release.status ===
+                      "Canary Running" &&
                     release.traffic < 100 && (
-                      <button
-                        className="secondary-btn"
-                        onClick={() =>
-                          promoteFromAnalytics(release.id)
-                        }
-                      >
-                        Promote to 100%
-                      </button>
+                      <>
+                        <button
+                          className="primary-btn"
+                          onClick={() =>
+                            increaseTraffic(
+                              release.id
+                            )
+                          }
+                        >
+                          ↑ Increase Traffic
+                        </button>
+
+                        <button
+                          className="secondary-btn"
+                          onClick={() =>
+                            promoteFromAnalytics(
+                              release.id
+                            )
+                          }
+                        >
+                          Promote to 100%
+                        </button>
+                      </>
                     )}
 
-                  {/* ROLLBACK */}
-                  {release.status === "Canary Running" && (
-                    <button
-                      className="rollback-btn"
-                      onClick={() =>
-                        rollbackRelease(release.id)
-                      }
-                    >
-                      ↩ Rollback
-                    </button>
+                  {release.status ===
+                    "Canary Running" && (
+                    <>
+                      <button
+                        className="rollback-button"
+                        onClick={() =>
+                          rollbackRelease(
+                            release.id
+                          )
+                        }
+                      >
+                        ↩ Rollback
+                      </button>
+
+                      <button
+                        className="analytics-rollback-btn"
+                        onClick={() =>
+                          rollbackFromAnalytics(
+                            release.id
+                          )
+                        }
+                      >
+                        Analytics Rollback
+                      </button>
+                    </>
                   )}
 
-                  {/* ANALYTICS ROLLBACK */}
-                  {release.status === "Canary Running" && (
-                    <button
-                      className="analytics-rollback-btn"
-                      onClick={() =>
-                        rollbackFromAnalytics(release.id)
-                      }
-                    >
-                      Analytics Rollback
-                    </button>
-                  )}
-
-                  {/* COMPLETED */}
-                  {release.status === "Completed" && (
+                  {release.status ===
+                    "Completed" && (
                     <span className="completed-text">
                       ✓ Release Completed
                     </span>
                   )}
 
-                  {/* REJECTED */}
-                  {release.status === "Rejected" && (
+                  {release.status ===
+                    "Rejected" && (
                     <span className="rejected-text">
                       ✕ Release Rejected
                     </span>
                   )}
 
-                  {/* ROLLED BACK */}
-                  {release.status === "Rolled Back" && (
+                  {release.status ===
+                    "Rolled Back" && (
                     <span className="rolled-back-text">
                       ↩ Release Rolled Back
                     </span>
@@ -786,6 +1223,7 @@ function Releases() {
               </div>
 
             ))
+
           )}
 
         </div>

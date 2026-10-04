@@ -1,87 +1,663 @@
-import "./App.css";
+import { useEffect, useState } from "react";
+import { addAuditLog } from "./utils/auditLogger";
+import API_BASE_URL from "./utils/api";
+
+const STORAGE_KEY = "progressiveDeliveryReleases";
+
+/*
+ * Default release shown when no release exists
+ * in localStorage.
+ */
+const DEFAULT_RELEASES = [
+  {
+    id: 1,
+    application: "Payment Service",
+    serviceName: "payment-service",
+    currentVersion: "v2.4.1",
+    previousVersion: "v2.4.1",
+    newVersion: "v2.5.0",
+    version: "v2.5.0",
+    status: "Canary",
+    approval: "Approved",
+    traffic: 10,
+  },
+  {
+    id: 2,
+    application: "Order Service",
+    serviceName: "order-service",
+    currentVersion: "v1.8.1",
+    previousVersion: "v1.8.1",
+    newVersion: "v1.8.2",
+    version: "v1.8.2",
+    status: "Completed",
+    approval: "Approved",
+    traffic: 100,
+  },
+  {
+    id: 3,
+    application: "User Service",
+    serviceName: "user-service",
+    currentVersion: "v3.0.0",
+    previousVersion: "v3.0.0",
+    newVersion: "v3.1.0",
+    version: "v3.1.0",
+    status: "Completed",
+    approval: "Approved",
+    traffic: 100,
+  },
+  {
+    id: 4,
+    application: "Notification Service",
+    serviceName: "notification-service",
+    currentVersion: "v1.4.2",
+    previousVersion: "v1.4.2",
+    newVersion: "v1.4.3",
+    version: "v1.4.3",
+    status: "Rolled Back",
+    approval: "Approved",
+    traffic: 0,
+  },
+];
 
 function Dashboard() {
-  return (
-    <>
+  const [releases, setReleases] = useState([]);
+  const [message, setMessage] = useState("");
+  const [isRollingBack, setIsRollingBack] = useState(false);
 
-      {/* ================= HEADER ================= */}
-      <header className="top-header">
+  // --------------------------------------------------
+  // LOAD RELEASES
+  // --------------------------------------------------
+
+  useEffect(() => {
+    loadReleases();
+
+    /*
+     * Listen for release changes made by
+     * another page/component.
+     */
+    const handleStorageChange = () => {
+      loadReleases();
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+
+    /*
+     * Refresh dashboard data periodically so that
+     * changes made by Releases / other components
+     * appear without manually refreshing the page.
+     */
+    const refreshInterval = setInterval(() => {
+      loadReleases();
+    }, 3000);
+
+    return () => {
+      window.removeEventListener(
+        "storage",
+        handleStorageChange
+      );
+
+      clearInterval(refreshInterval);
+    };
+  }, []);
+
+  // --------------------------------------------------
+  // LOAD RELEASE DATA
+  // --------------------------------------------------
+
+  const loadReleases = () => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+
+      if (saved) {
+        const parsed = JSON.parse(saved);
+
+        if (Array.isArray(parsed)) {
+          setReleases(parsed);
+          return;
+        }
+      }
+
+      /*
+       * If there is no localStorage data,
+       * initialize it with demo releases.
+       */
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(DEFAULT_RELEASES)
+      );
+
+      setReleases(DEFAULT_RELEASES);
+    } catch (error) {
+      console.error(
+        "Unable to load releases:",
+        error
+      );
+
+      setReleases(DEFAULT_RELEASES);
+    }
+  };
+
+  // --------------------------------------------------
+  // SHOW MESSAGE
+  // --------------------------------------------------
+
+  const showMessage = (text) => {
+    setMessage(text);
+
+    setTimeout(() => {
+      setMessage("");
+    }, 5000);
+  };
+
+  // --------------------------------------------------
+  // FIND ACTIVE CANARY
+  // --------------------------------------------------
+
+  const activeRelease =
+    releases.find((release) => {
+      const status =
+        String(release.status || "").toLowerCase();
+
+      const traffic =
+        Number(release.traffic || 0);
+
+      const approval =
+        String(release.approval || "").toLowerCase();
+
+      return (
+        (
+          status === "canary" ||
+          status === "canary running"
+        ) &&
+        traffic > 0 &&
+        approval === "approved"
+      );
+    }) || null;
+
+  // --------------------------------------------------
+  // CURRENT / CANARY VERSION
+  // --------------------------------------------------
+
+  /*
+   * IMPORTANT:
+   *
+   * previousVersion = stable/current production version
+   * newVersion      = active canary version
+   *
+   * Example:
+   *
+   * v2.4.1 → v2.5.0
+   *
+   * Current Version = v2.4.1
+   * Canary Version  = v2.5.0
+   */
+
+  const currentVersion =
+    activeRelease?.previousVersion ||
+    activeRelease?.currentVersion ||
+    "";
+
+  const canaryVersion =
+    activeRelease?.newVersion ||
+    activeRelease?.version ||
+    "";
+
+  const canaryTraffic =
+    Number(activeRelease?.traffic || 0);
+
+  // --------------------------------------------------
+  // ROLLBACK RELEASE
+  // --------------------------------------------------
+
+  const rollbackRelease = async () => {
+    if (isRollingBack) {
+      return;
+    }
+
+    if (!activeRelease) {
+      showMessage(
+        "⚠ No active canary release is available for rollback."
+      );
+
+      return;
+    }
+
+    /*
+     * Rollback MUST target the previous stable version.
+     *
+     * Example:
+     *
+     * Current stable: v2.4.1
+     * Canary:         v2.5.0
+     *
+     * Rollback target = v2.4.1
+     */
+
+    const targetVersion =
+      activeRelease.previousVersion ||
+      activeRelease.currentVersion ||
+      activeRelease.oldVersion;
+
+    if (!targetVersion) {
+      showMessage(
+        "⚠ Previous version could not be determined."
+      );
+
+      return;
+    }
+
+    const newVersion =
+      activeRelease.newVersion ||
+      activeRelease.version;
+
+    const confirmed =
+      window.confirm(
+        `Are you sure you want to rollback ${activeRelease.application} from ${newVersion} to ${targetVersion}?`
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsRollingBack(true);
+
+    try {
+      // ------------------------------------------------
+      // 1. CALL BACKEND ROLLBACK API
+      // ------------------------------------------------
+
+      const response = await fetch(
+        `${API_BASE_URL}/api/rollback`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            targetVersion: targetVersion,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorText =
+          await response.text();
+
+        throw new Error(
+          errorText ||
+            "Rollback API request failed."
+        );
+      }
+
+      const rollbackResult =
+        await response.json();
+
+      console.log(
+        "Rollback API response:",
+        rollbackResult
+      );
+
+      // ------------------------------------------------
+      // 2. UPDATE FRONTEND RELEASE STATE
+      // ------------------------------------------------
+
+      const updatedReleases =
+        releases.map((release) => {
+          if (
+            release.id !==
+            activeRelease.id
+          ) {
+            return release;
+          }
+
+          return {
+            ...release,
+
+            /*
+             * Stable version becomes current.
+             */
+            currentVersion:
+              targetVersion,
+
+            /*
+             * Keep previousVersion for
+             * rollback/history.
+             */
+            previousVersion:
+              targetVersion,
+
+            /*
+             * Keep the attempted canary
+             * version for history.
+             */
+            newVersion:
+              newVersion,
+
+            /*
+             * After rollback, the active
+             * version is the stable version.
+             */
+            version:
+              targetVersion,
+
+            /*
+             * Rollback state.
+             */
+            status:
+              "Rolled Back",
+
+            /*
+             * Canary receives no traffic.
+             */
+            traffic: 0,
+
+            /*
+             * Keep approval information.
+             */
+            approval:
+              release.approval ||
+              "Approved",
+
+            /*
+             * Store rollback information
+             * for UI/history.
+             */
+            rollbackTarget:
+              targetVersion,
+
+            rollbackFrom:
+              newVersion,
+
+            rollbackCompletedAt:
+              new Date().toISOString(),
+          };
+        });
+
+      // ------------------------------------------------
+      // 3. SAVE TO LOCAL STORAGE
+      // ------------------------------------------------
+
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(
+          updatedReleases
+        )
+      );
+
+      // ------------------------------------------------
+      // 4. UPDATE REACT STATE
+      // ------------------------------------------------
+
+      setReleases(
+        updatedReleases
+      );
+
+      // ------------------------------------------------
+      // 5. AUDIT LOG
+      // ------------------------------------------------
+
+      addAuditLog(
+        "Rollback Release",
+        `${activeRelease.application} ${newVersion}`,
+        "Success",
+        "System"
+      );
+
+      // ------------------------------------------------
+      // 6. SUCCESS MESSAGE
+      // ------------------------------------------------
+
+      showMessage(
+        `✓ Rollback completed successfully. ${activeRelease.application} is now running ${targetVersion}.`
+      );
+    } catch (error) {
+      console.error(
+        "Rollback failed:",
+        error
+      );
+
+      addAuditLog(
+        "Rollback Release",
+        `${activeRelease.application} ${newVersion}`,
+        "Failed",
+        "System"
+      );
+
+      showMessage(
+        `✕ Rollback failed: ${
+          error.message ||
+          "Unable to rollback release."
+        }`
+      );
+    } finally {
+      setIsRollingBack(false);
+    }
+  };
+
+  // --------------------------------------------------
+  // CALCULATE DASHBOARD VALUES
+  // --------------------------------------------------
+
+  const applicationsCount =
+    releases.length;
+
+  const activeReleasesCount =
+    releases.filter((release) => {
+      const status =
+        String(
+          release.status || ""
+        ).toLowerCase();
+
+      const approval =
+        String(
+          release.approval || ""
+        ).toLowerCase();
+
+      const traffic =
+        Number(
+          release.traffic || 0
+        );
+
+      return (
+        (
+          status === "canary" ||
+          status === "canary running"
+        ) &&
+        approval === "approved" &&
+        traffic > 0
+      );
+    }).length;
+
+  const rollbackCount =
+    releases.filter(
+      (release) =>
+        String(
+          release.status || ""
+        ).toLowerCase() ===
+        "rolled back"
+    ).length;
+
+  // --------------------------------------------------
+  // RENDER
+  // --------------------------------------------------
+
+  return (
+    <div className="dashboard-page">
+
+      {/* =================================================
+          PAGE HEADER
+      ================================================= */}
+
+      <div className="top-header">
 
         <div>
-          <p className="welcome-text">Welcome back</p>
-          <h1>Release Dashboard</h1>
+          <h1>
+            Release Dashboard
+          </h1>
+
+          <p>
+            Monitor and manage
+            progressive deployments
+          </p>
         </div>
 
-        <button className="new-release-btn">
-          + New Release
-        </button>
+      </div>
 
-      </header>
+      {/* =================================================
+          MESSAGE
+      ================================================= */}
 
+      {message && (
+        <div
+          className={
+            message.startsWith("✓")
+              ? "status-message success-message"
+              : "status-message error-message"
+          }
+        >
+          {message}
+        </div>
+      )}
 
-      {/* ================= STATUS ================= */}
+      {/* =================================================
+          SYSTEM STATUS
+      ================================================= */}
+
       <div className="status-banner">
 
-        <div className="status-left">
-          <span className="status-dot"></span>
-
-          <div>
-            <strong>All systems operational</strong>
-            <p>
-              Progressive delivery pipeline is running normally.
-            </p>
-          </div>
+        <div className="status-icon">
+          ✓
         </div>
 
-        <span className="status-time">
-          Updated just now
+        <div>
+          <strong>
+            All systems operational
+          </strong>
+
+          <p>
+            Progressive delivery
+            control plane is running
+            normally.
+          </p>
+        </div>
+
+        <span className="live-status">
+          ● LIVE
         </span>
 
       </div>
 
+      {/* =================================================
+          STATISTICS
+      ================================================= */}
 
-      {/* ================= STATISTICS ================= */}
       <section className="stats-grid">
 
         <div className="stat-card">
-          <span className="stat-label">Applications</span>
-          <h2>8</h2>
-          <p className="stat-positive">↑ 2 this month</p>
+          <div className="stat-top">
+            <span>
+              Applications
+            </span>
+
+            <span className="stat-icon blue">
+              ◉
+            </span>
+          </div>
+
+          <h2>
+            {applicationsCount}
+          </h2>
+
+          <p>
+            Registered services
+          </p>
         </div>
 
         <div className="stat-card">
-          <span className="stat-label">Active Releases</span>
-          <h2>5</h2>
-          <p className="stat-positive">↑ 1 today</p>
+          <div className="stat-top">
+            <span>
+              Active Releases
+            </span>
+
+            <span className="stat-icon purple">
+              ◆
+            </span>
+          </div>
+
+          <h2>
+            {activeReleasesCount}
+          </h2>
+
+          <p>
+            Currently in canary
+          </p>
         </div>
 
         <div className="stat-card">
-          <span className="stat-label">Canary Traffic</span>
-          <h2>10%</h2>
-          <p>Current allocation</p>
+          <div className="stat-top">
+            <span>
+              Canary Traffic
+            </span>
+
+            <span className="stat-icon orange">
+              %
+            </span>
+          </div>
+
+          <h2>
+            {canaryTraffic}%
+          </h2>
+
+          <p>
+            Current allocation
+          </p>
         </div>
 
         <div className="stat-card">
-          <span className="stat-label">Rollbacks</span>
-          <h2>2</h2>
-          <p className="stat-negative">↓ 1 this week</p>
+          <div className="stat-top">
+            <span>
+              Rollbacks
+            </span>
+
+            <span className="stat-icon red">
+              ↩
+            </span>
+          </div>
+
+          <h2>
+            {rollbackCount}
+          </h2>
+
+          <p>
+            Completed rollbacks
+          </p>
         </div>
 
       </section>
 
+      {/* =================================================
+          MAIN DASHBOARD
+      ================================================= */}
 
-      {/* ================= RELEASE DASHBOARD ================= */}
       <section className="dashboard-grid">
 
+        {/* =================================================
+            RELEASE HEALTH
+        ================================================= */}
 
-        {/* Release Health */}
-        <div className="dashboard-card">
+        <div className="panel">
 
-          <div className="card-header">
+          <div className="panel-header">
 
             <div>
-              <h2>Release Health</h2>
-              <p>Current release performance</p>
+              <h2>
+                Release Health
+              </h2>
+
+              <p>
+                Current release
+                performance
+              </p>
             </div>
 
             <span className="healthy-badge">
@@ -90,23 +666,24 @@ function Dashboard() {
 
           </div>
 
+          <div className="health-chart">
 
-          <div className="chart">
+            <div className="chart-y">
+              <span>100%</span>
+              <span>75%</span>
+              <span>50%</span>
+              <span>25%</span>
+              <span>0%</span>
+            </div>
 
-            <div className="chart-line line-1"></div>
-            <div className="chart-line line-2"></div>
-            <div className="chart-line line-3"></div>
+            <div className="chart-area">
 
-            <div className="chart-bars">
+              <div className="grid-line line1" />
+              <div className="grid-line line2" />
+              <div className="grid-line line3" />
+              <div className="grid-line line4" />
 
-              <div style={{ height: "45%" }}></div>
-              <div style={{ height: "60%" }}></div>
-              <div style={{ height: "50%" }}></div>
-              <div style={{ height: "72%" }}></div>
-              <div style={{ height: "65%" }}></div>
-              <div style={{ height: "82%" }}></div>
-              <div style={{ height: "76%" }}></div>
-              <div style={{ height: "90%" }}></div>
+              <div className="chart-line" />
 
             </div>
 
@@ -114,156 +691,332 @@ function Dashboard() {
 
         </div>
 
+        {/* =================================================
+            CURRENT RELEASE
+        ================================================= */}
 
-        {/* Current Release */}
-        <div className="dashboard-card">
+        <div className="panel">
 
-          <div className="card-header">
+          <div className="panel-header">
 
             <div>
-              <h2>Current Release</h2>
-              <p>Payment Service</p>
+              <h2>
+                Current Release
+              </h2>
+
+              <p>
+                {activeRelease
+                  ? activeRelease.application
+                  : "Payment Service"}
+              </p>
             </div>
 
-            <span className="canary-badge">
-              Canary
+            <span
+              className={
+                activeRelease
+                  ? "canary-badge"
+                  : "healthy-badge"
+              }
+            >
+              {activeRelease
+                ? "Canary"
+                : "No Canary"}
             </span>
 
           </div>
 
+          {activeRelease ? (
 
-          <div className="release-version">
+            <>
 
-            <span>v2.4.1</span>
+              {/* VERSION */}
 
-            <span>→</span>
+              <div className="release-version">
+                <span>
+                  {currentVersion}
+                </span>
 
-            <strong>v2.5.0</strong>
+                <span>
+                  →
+                </span>
 
-          </div>
+                <strong>
+                  {canaryVersion}
+                </strong>
+              </div>
 
+              {/* TRAFFIC */}
 
-          <div className="traffic-section">
+              <div className="traffic-section">
 
-            <div className="traffic-header">
+                <div className="traffic-header">
 
-              <span>Canary Traffic</span>
+                  <span>
+                    Canary Traffic
+                  </span>
 
-              <strong>10%</strong>
+                  <strong>
+                    {canaryTraffic}%
+                  </strong>
+
+                </div>
+
+                <div className="traffic-bar">
+
+                  <div
+                    className="traffic-progress"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.max(
+                          0,
+                          canaryTraffic
+                        )
+                      )}%`,
+                    }}
+                  />
+
+                </div>
+
+              </div>
+
+              {/* RELEASE DETAILS */}
+
+              <div className="release-details">
+
+                <div>
+                  <small>
+                    Current Version
+                  </small>
+
+                  <strong>
+                    {currentVersion ||
+                      "N/A"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Canary Version
+                  </small>
+
+                  <strong>
+                    {canaryVersion ||
+                      "N/A"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Status
+                  </small>
+
+                  <strong>
+                    {activeRelease.status ||
+                      "N/A"}
+                  </strong>
+                </div>
+
+              </div>
+
+              {/* ROLLBACK BUTTON */}
+
+              <button
+                type="button"
+                className="rollback-button"
+                onClick={
+                  rollbackRelease
+                }
+                disabled={
+                  isRollingBack
+                }
+              >
+                {isRollingBack
+                  ? "Rolling Back..."
+                  : "Rollback Release"}
+              </button>
+
+            </>
+
+          ) : (
+
+            <div className="release-info">
+
+              <h3>
+                No Active Canary
+              </h3>
+
+              <p className="version">
+                There is currently no
+                approved canary release.
+              </p>
 
             </div>
 
-
-            <div className="traffic-bar">
-
-              <div
-                className="traffic-progress"
-                style={{ width: "10%" }}
-              ></div>
-
-            </div>
-
-          </div>
-
-
-          <button className="rollback-btn">
-            Rollback Release
-          </button>
+          )}
 
         </div>
 
       </section>
 
+      {/* =================================================
+          RECENT RELEASES
+      ================================================= */}
 
-      {/* ================= RECENT RELEASES ================= */}
-      <section className="dashboard-card recent-releases">
+      <section className="panel recent-panel">
 
-        <div className="card-header">
+        <div className="panel-header">
 
           <div>
-            <h2>Recent Releases</h2>
-            <p>Latest progressive delivery activity</p>
+            <h2>
+              Recent Releases
+            </h2>
+
+            <p>
+              Latest progressive
+              delivery activity
+            </p>
           </div>
 
         </div>
-
 
         <div className="release-table">
 
-          <div className="table-header">
+          <div className="table-row table-heading">
 
-            <span>Application</span>
-            <span>Version</span>
-            <span>Status</span>
-            <span>Traffic</span>
-
-          </div>
-
-
-          <div className="table-row">
-
-            <span>Payment Service</span>
-
-            <span>v2.5.0</span>
-
-            <span className="table-status canary-status">
-              Canary
+            <span>
+              Application
             </span>
 
-            <span>10%</span>
-
-          </div>
-
-
-          <div className="table-row">
-
-            <span>Order Service</span>
-
-            <span>v1.8.2</span>
-
-            <span className="table-status success-status">
-              Completed
+            <span>
+              Version
             </span>
 
-            <span>100%</span>
-
-          </div>
-
-
-          <div className="table-row">
-
-            <span>User Service</span>
-
-            <span>v3.1.0</span>
-
-            <span className="table-status success-status">
-              Completed
+            <span>
+              Status
             </span>
 
-            <span>100%</span>
-
-          </div>
-
-
-          <div className="table-row">
-
-            <span>Notification Service</span>
-
-            <span>v1.4.3</span>
-
-            <span className="table-status rollback-status">
-              Rolled Back
+            <span>
+              Traffic
             </span>
 
-            <span>0%</span>
+            <span>
+              Approval
+            </span>
 
           </div>
+
+          {releases.length === 0 ? (
+
+            <div className="table-row">
+
+              <span>
+                No releases
+              </span>
+
+            </div>
+
+          ) : (
+
+            releases
+              .slice()
+              .reverse()
+              .slice(0, 10)
+              .map((release) => {
+
+                const status =
+                  String(
+                    release.status ||
+                    ""
+                  );
+
+                const statusLower =
+                  status.toLowerCase();
+
+                let statusClass =
+                  "status";
+
+                if (
+                  statusLower ===
+                  "completed"
+                ) {
+                  statusClass =
+                    "status healthy";
+                } else if (
+                  statusLower ===
+                    "canary" ||
+                  statusLower ===
+                    "canary running"
+                ) {
+                  statusClass =
+                    "status testing";
+                } else if (
+                  statusLower ===
+                  "rolled back"
+                ) {
+                  statusClass =
+                    "status rollback-status";
+                }
+
+                return (
+                  <div
+                    className="table-row"
+                    key={
+                      release.id
+                    }
+                  >
+
+                    <strong>
+                      {
+                        release.application ||
+                        release.serviceName ||
+                        "Payment Service"
+                      }
+                    </strong>
+
+                    <span>
+                      {
+                        release.newVersion ||
+                        release.version ||
+                        "N/A"
+                      }
+                    </span>
+
+                    <span
+                      className={
+                        statusClass
+                      }
+                    >
+                      {status ||
+                        "Created"}
+                    </span>
+
+                    <span>
+                      {Number(
+                        release.traffic ||
+                        0
+                      )}
+                      %
+                    </span>
+
+                    <span>
+                      {
+                        release.approval ||
+                        "Pending"
+                      }
+                    </span>
+
+                  </div>
+                );
+              })
+
+          )}
 
         </div>
 
       </section>
 
-    </>
+    </div>
   );
 }
 
