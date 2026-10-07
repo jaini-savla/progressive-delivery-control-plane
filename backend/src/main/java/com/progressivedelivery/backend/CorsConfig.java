@@ -11,10 +11,17 @@ public class CorsConfig implements WebMvcConfigurer {
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
                 .allowedOrigins(
-        "http://localhost:5173",
-        "https://progressive-delivery-control-plane.onrender.com"
-        )
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                        "http://localhost:5173",
+                        "https://progressive-delivery-control-plane.onrender.com",
+                        "https://progressive-delivery-control-plane-6r9b.onrender.com"
+                )
+                .allowedMethods(
+                        "GET",
+                        "POST",
+                        "PUT",
+                        "DELETE",
+                        "OPTIONS"
+                )
                 .allowedHeaders("*");
     }
 }
