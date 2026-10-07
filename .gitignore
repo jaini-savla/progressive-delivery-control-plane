@@ -24,3 +24,5 @@ dist-ssr
 *.sw?
 
 .env
+
+backend/src/main/resources/application-local.properties

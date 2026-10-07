@@ -295,7 +295,7 @@ public class MetricsController {
     // =========================================================
 
     @GetMapping("/prometheus/summary")
-    public ResponseEntity<?> prometheusSummary() {
+    public ResponseEntity<PrometheusSummaryResponse> prometheusSummary() {
 
         double stableLatency =
                 prometheusService.getAverageLatency("stable");
@@ -303,10 +303,15 @@ public class MetricsController {
         double canaryLatency =
                 prometheusService.getAverageLatency("canary");
 
+        boolean metricsAvailable =
+                stableLatency > 0 &&
+                canaryLatency > 0;
+
         return ResponseEntity.ok(
                 new PrometheusSummaryResponse(
                         stableLatency,
-                        canaryLatency
+                        canaryLatency,
+                        metricsAvailable
                 )
         );
     }
@@ -319,13 +324,16 @@ public class MetricsController {
 
         private double stableLatency;
         private double canaryLatency;
+        private boolean metricsAvailable;
 
         public PrometheusSummaryResponse(
                 double stableLatency,
-                double canaryLatency) {
+                double canaryLatency,
+                boolean metricsAvailable) {
 
             this.stableLatency = stableLatency;
             this.canaryLatency = canaryLatency;
+            this.metricsAvailable = metricsAvailable;
         }
 
         public double getStableLatency() {
@@ -334,6 +342,10 @@ public class MetricsController {
 
         public double getCanaryLatency() {
             return canaryLatency;
+        }
+
+        public boolean isMetricsAvailable() {
+            return metricsAvailable;
         }
     }
 
