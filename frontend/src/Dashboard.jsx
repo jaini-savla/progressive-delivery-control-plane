@@ -1,13 +1,20 @@
 import { useEffect, useState } from "react";
-import { addAuditLog } from "./utils/auditLogger";
 import API_BASE_URL from "./utils/api";
+
+/*
+ * --------------------------------------------------
+ * STORAGE
+ * --------------------------------------------------
+ */
 
 const STORAGE_KEY = "progressiveDeliveryReleases";
 
 /*
- * Default release shown when no release exists
- * in localStorage.
+ * --------------------------------------------------
+ * DEFAULT RELEASES
+ * --------------------------------------------------
  */
+
 const DEFAULT_RELEASES = [
   {
     id: 1,
@@ -59,36 +66,98 @@ const DEFAULT_RELEASES = [
   },
 ];
 
+/*
+ * --------------------------------------------------
+ * AUDIT LOG HELPER
+ * --------------------------------------------------
+ */
+
+const addAuditLog = (
+  action,
+  resource,
+  status,
+  performedBy
+) => {
+  try {
+    const existing =
+      JSON.parse(
+        localStorage.getItem("auditLogs") || "[]"
+      );
+
+    const newLog = {
+      id: Date.now(),
+      action,
+      resource,
+      status,
+      performedBy,
+      timestamp: new Date().toISOString(),
+    };
+
+    localStorage.setItem(
+      "auditLogs",
+      JSON.stringify([
+        newLog,
+        ...existing,
+      ])
+    );
+  } catch (error) {
+    console.error(
+      "Unable to save audit log:",
+      error
+    );
+  }
+};
+
+/*
+ * --------------------------------------------------
+ * DASHBOARD COMPONENT
+ * --------------------------------------------------
+ */
+
 function Dashboard() {
   const [releases, setReleases] = useState([]);
-  const [message, setMessage] = useState("");
-  const [isRollingBack, setIsRollingBack] = useState(false);
 
-  // --------------------------------------------------
-  // LOAD RELEASES
-  // --------------------------------------------------
+  const [message, setMessage] =
+    useState("");
+
+  const [isRollingBack, setIsRollingBack] =
+    useState(false);
+
+  /*
+   * ------------------------------------------------
+   * REAL PROMETHEUS LATENCY STATE
+   * ------------------------------------------------
+   */
+
+  const [latencyMetrics, setLatencyMetrics] =
+    useState({
+      stableLatency: null,
+      canaryLatency: null,
+      metricsAvailable: false,
+    });
+
+  /*
+   * ------------------------------------------------
+   * LOAD RELEASES
+   * ------------------------------------------------
+   */
 
   useEffect(() => {
     loadReleases();
 
-    /*
-     * Listen for release changes made by
-     * another page/component.
-     */
     const handleStorageChange = () => {
       loadReleases();
     };
 
-    window.addEventListener("storage", handleStorageChange);
+    window.addEventListener(
+      "storage",
+      handleStorageChange
+    );
 
-    /*
-     * Refresh dashboard data periodically so that
-     * changes made by Releases / other components
-     * appear without manually refreshing the page.
-     */
-    const refreshInterval = setInterval(() => {
-      loadReleases();
-    }, 3000);
+    const refreshInterval =
+      setInterval(() => {
+        loadReleases();
+      }, 3000);
 
     return () => {
       window.removeEventListener(
@@ -96,50 +165,183 @@ function Dashboard() {
         handleStorageChange
       );
 
-      clearInterval(refreshInterval);
+      clearInterval(
+        refreshInterval
+      );
     };
   }, []);
 
-  // --------------------------------------------------
-  // LOAD RELEASE DATA
-  // --------------------------------------------------
+  /*
+   * ------------------------------------------------
+   * LOAD REAL PROMETHEUS METRICS
+   * ------------------------------------------------
+   */
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadLatencyMetrics =
+      async () => {
+        try {
+          const response =
+            await fetch(
+              `${API_BASE_URL}/api/metrics/prometheus/summary`
+            );
+
+          if (!response.ok) {
+            throw new Error(
+              `Metrics request failed: ${response.status}`
+            );
+          }
+
+          const data =
+            await response.json();
+
+          console.log(
+            "Prometheus Dashboard metrics:",
+            data
+          );
+
+          if (!isMounted) {
+            return;
+          }
+
+          /*
+           * Prometheus returns latency
+           * in seconds.
+           *
+           * Convert seconds → milliseconds.
+           */
+
+          const stable =
+            Number(
+              data.stableLatency
+            );
+
+          const canary =
+            Number(
+              data.canaryLatency
+            );
+
+          if (
+            data.metricsAvailable &&
+            Number.isFinite(stable) &&
+            Number.isFinite(canary) &&
+            stable > 0 &&
+            canary > 0
+          ) {
+            setLatencyMetrics({
+              stableLatency:
+                stable * 1000,
+
+              canaryLatency:
+                canary * 1000,
+
+              metricsAvailable:
+                true,
+            });
+          } else {
+            setLatencyMetrics({
+              stableLatency: null,
+              canaryLatency: null,
+              metricsAvailable:
+                false,
+            });
+          }
+        } catch (error) {
+          console.error(
+            "Unable to load Prometheus metrics:",
+            error
+          );
+
+          if (isMounted) {
+            setLatencyMetrics({
+              stableLatency: null,
+              canaryLatency: null,
+              metricsAvailable:
+                false,
+            });
+          }
+        }
+      };
+
+    /*
+     * Load immediately.
+     */
+
+    loadLatencyMetrics();
+
+    /*
+     * Refresh every 3 seconds.
+     */
+
+    const metricsInterval =
+      setInterval(
+        loadLatencyMetrics,
+        3000
+      );
+
+    return () => {
+      isMounted = false;
+
+      clearInterval(
+        metricsInterval
+      );
+    };
+  }, []);
+
+  /*
+   * ------------------------------------------------
+   * LOAD RELEASE DATA
+   * ------------------------------------------------
+   */
 
   const loadReleases = () => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved =
+        localStorage.getItem(
+          STORAGE_KEY
+        );
 
       if (saved) {
-        const parsed = JSON.parse(saved);
+        const parsed =
+          JSON.parse(saved);
 
-        if (Array.isArray(parsed)) {
+        if (
+          Array.isArray(parsed)
+        ) {
           setReleases(parsed);
           return;
         }
       }
 
-      /*
-       * If there is no localStorage data,
-       * initialize it with demo releases.
-       */
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify(DEFAULT_RELEASES)
+        JSON.stringify(
+          DEFAULT_RELEASES
+        )
       );
 
-      setReleases(DEFAULT_RELEASES);
+      setReleases(
+        DEFAULT_RELEASES
+      );
     } catch (error) {
       console.error(
         "Unable to load releases:",
         error
       );
 
-      setReleases(DEFAULT_RELEASES);
+      setReleases(
+        DEFAULT_RELEASES
+      );
     }
   };
 
-  // --------------------------------------------------
-  // SHOW MESSAGE
-  // --------------------------------------------------
+  /*
+   * ------------------------------------------------
+   * SHOW MESSAGE
+   * ------------------------------------------------
+   */
 
   const showMessage = (text) => {
     setMessage(text);
@@ -149,47 +351,48 @@ function Dashboard() {
     }, 5000);
   };
 
-  // --------------------------------------------------
-  // FIND ACTIVE CANARY
-  // --------------------------------------------------
+  /*
+   * ------------------------------------------------
+   * FIND ACTIVE CANARY
+   * ------------------------------------------------
+   */
 
   const activeRelease =
-    releases.find((release) => {
-      const status =
-        String(release.status || "").toLowerCase();
+    releases.find(
+      (release) => {
+        const status =
+          String(
+            release.status || ""
+          ).toLowerCase();
 
-      const traffic =
-        Number(release.traffic || 0);
+        const traffic =
+          Number(
+            release.traffic || 0
+          );
 
-      const approval =
-        String(release.approval || "").toLowerCase();
+        const approval =
+          String(
+            release.approval || ""
+          ).toLowerCase();
 
-      return (
-        (
-          status === "canary" ||
-          status === "canary running"
-        ) &&
-        traffic > 0 &&
-        approval === "approved"
-      );
-    }) || null;
-
-  // --------------------------------------------------
-  // CURRENT / CANARY VERSION
-  // --------------------------------------------------
+        return (
+          (
+            status ===
+              "canary" ||
+            status ===
+              "canary running"
+          ) &&
+          traffic > 0 &&
+          approval ===
+            "approved"
+        );
+      }
+    ) || null;
 
   /*
-   * IMPORTANT:
-   *
-   * previousVersion = stable/current production version
-   * newVersion      = active canary version
-   *
-   * Example:
-   *
-   * v2.4.1 → v2.5.0
-   *
-   * Current Version = v2.4.1
-   * Canary Version  = v2.5.0
+   * ------------------------------------------------
+   * CURRENT / CANARY VERSION
+   * ------------------------------------------------
    */
 
   const currentVersion =
@@ -203,270 +406,328 @@ function Dashboard() {
     "";
 
   const canaryTraffic =
-    Number(activeRelease?.traffic || 0);
+    Number(
+      activeRelease?.traffic || 0
+    );
 
-  // --------------------------------------------------
-  // ROLLBACK RELEASE
-  // --------------------------------------------------
+  /*
+   * ------------------------------------------------
+   * LATENCY DIFFERENCE
+   * ------------------------------------------------
+   */
 
-  const rollbackRelease = async () => {
-    if (isRollingBack) {
-      return;
-    }
+  const latencyDifference =
+    latencyMetrics.metricsAvailable &&
+    latencyMetrics.stableLatency >
+      0
+      ? (
+          (
+            latencyMetrics.canaryLatency -
+            latencyMetrics.stableLatency
+          ) /
+          latencyMetrics.stableLatency
+        ) *
+        100
+      : null;
 
-    if (!activeRelease) {
-      showMessage(
-        "⚠ No active canary release is available for rollback."
-      );
+  /*
+   * ------------------------------------------------
+   * GRAPH SCALE
+   * ------------------------------------------------
+   */
 
-      return;
-    }
+  const maxLatency =
+    Math.max(
+      latencyMetrics.stableLatency ||
+        0,
+      latencyMetrics.canaryLatency ||
+        0
+    );
 
-    /*
-     * Rollback MUST target the previous stable version.
-     *
-     * Example:
-     *
-     * Current stable: v2.4.1
-     * Canary:         v2.5.0
-     *
-     * Rollback target = v2.4.1
-     */
+  const stableBarWidth =
+    maxLatency > 0 &&
+    latencyMetrics.stableLatency
+      ? Math.max(
+          5,
+          Math.min(
+            100,
+            (
+              latencyMetrics.stableLatency /
+              maxLatency
+            ) *
+              100
+          )
+        )
+      : 0;
 
-    const targetVersion =
-      activeRelease.previousVersion ||
-      activeRelease.currentVersion ||
-      activeRelease.oldVersion;
+  const canaryBarWidth =
+    maxLatency > 0 &&
+    latencyMetrics.canaryLatency
+      ? Math.max(
+          5,
+          Math.min(
+            100,
+            (
+              latencyMetrics.canaryLatency /
+              maxLatency
+            ) *
+              100
+          )
+        )
+      : 0;
 
-    if (!targetVersion) {
-      showMessage(
-        "⚠ Previous version could not be determined."
-      );
+  /*
+   * ------------------------------------------------
+   * ROLLBACK RELEASE
+   * ------------------------------------------------
+   */
 
-      return;
-    }
-
-    const newVersion =
-      activeRelease.newVersion ||
-      activeRelease.version;
-
-    const confirmed =
-      window.confirm(
-        `Are you sure you want to rollback ${activeRelease.application} from ${newVersion} to ${targetVersion}?`
-      );
-
-    if (!confirmed) {
-      return;
-    }
-
-    setIsRollingBack(true);
-
-    try {
-      // ------------------------------------------------
-      // 1. CALL BACKEND ROLLBACK API
-      // ------------------------------------------------
-
-      const response = await fetch(
-        `${API_BASE_URL}/api/rollback`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            targetVersion: targetVersion,
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        const errorText =
-          await response.text();
-
-        throw new Error(
-          errorText ||
-            "Rollback API request failed."
-        );
+  const rollbackRelease =
+    async () => {
+      if (isRollingBack) {
+        return;
       }
 
-      const rollbackResult =
-        await response.json();
+      if (!activeRelease) {
+        showMessage(
+          "⚠ No active canary release is available for rollback."
+        );
 
-      console.log(
-        "Rollback API response:",
-        rollbackResult
-      );
+        return;
+      }
 
-      // ------------------------------------------------
-      // 2. UPDATE FRONTEND RELEASE STATE
-      // ------------------------------------------------
+      const targetVersion =
+        activeRelease.previousVersion ||
+        activeRelease.currentVersion ||
+        activeRelease.oldVersion;
 
-      const updatedReleases =
-        releases.map((release) => {
-          if (
-            release.id !==
-            activeRelease.id
-          ) {
-            return release;
-          }
+      if (!targetVersion) {
+        showMessage(
+          "⚠ Previous version could not be determined."
+        );
 
-          return {
-            ...release,
+        return;
+      }
 
-            /*
-             * Stable version becomes current.
-             */
-            currentVersion:
-              targetVersion,
+      const newVersion =
+        activeRelease.newVersion ||
+        activeRelease.version;
 
-            /*
-             * Keep previousVersion for
-             * rollback/history.
-             */
-            previousVersion:
-              targetVersion,
+      const confirmed =
+        window.confirm(
+          `Are you sure you want to rollback ${activeRelease.application} from ${newVersion} to ${targetVersion}?`
+        );
 
-            /*
-             * Keep the attempted canary
-             * version for history.
-             */
-            newVersion:
-              newVersion,
+      if (!confirmed) {
+        return;
+      }
 
-            /*
-             * After rollback, the active
-             * version is the stable version.
-             */
-            version:
-              targetVersion,
+      setIsRollingBack(true);
 
-            /*
-             * Rollback state.
-             */
-            status:
-              "Rolled Back",
+      try {
+        /*
+         * --------------------------------------------
+         * 1. BACKEND ROLLBACK API
+         * --------------------------------------------
+         */
 
-            /*
-             * Canary receives no traffic.
-             */
-            traffic: 0,
+        const response =
+          await fetch(
+            `${API_BASE_URL}/api/rollback`,
+            {
+              method: "POST",
 
-            /*
-             * Keep approval information.
-             */
-            approval:
-              release.approval ||
-              "Approved",
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
 
-            /*
-             * Store rollback information
-             * for UI/history.
-             */
-            rollbackTarget:
-              targetVersion,
+              body: JSON.stringify({
+                targetVersion:
+                  targetVersion,
+              }),
+            }
+          );
 
-            rollbackFrom:
-              newVersion,
+        if (!response.ok) {
+          const errorText =
+            await response.text();
 
-            rollbackCompletedAt:
-              new Date().toISOString(),
-          };
-        });
+          throw new Error(
+            errorText ||
+              "Rollback API request failed."
+          );
+        }
 
-      // ------------------------------------------------
-      // 3. SAVE TO LOCAL STORAGE
-      // ------------------------------------------------
+        const rollbackResult =
+          await response.json();
 
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify(
+        console.log(
+          "Rollback API response:",
+          rollbackResult
+        );
+
+        /*
+         * --------------------------------------------
+         * 2. UPDATE RELEASE STATE
+         * --------------------------------------------
+         */
+
+        const updatedReleases =
+          releases.map(
+            (release) => {
+              if (
+                release.id !==
+                activeRelease.id
+              ) {
+                return release;
+              }
+
+              return {
+                ...release,
+
+                currentVersion:
+                  targetVersion,
+
+                previousVersion:
+                  targetVersion,
+
+                newVersion:
+                  newVersion,
+
+                version:
+                  targetVersion,
+
+                status:
+                  "Rolled Back",
+
+                traffic: 0,
+
+                approval:
+                  release.approval ||
+                  "Approved",
+
+                rollbackTarget:
+                  targetVersion,
+
+                rollbackFrom:
+                  newVersion,
+
+                rollbackCompletedAt:
+                  new Date().toISOString(),
+              };
+            }
+          );
+
+        /*
+         * --------------------------------------------
+         * 3. SAVE LOCAL STORAGE
+         * --------------------------------------------
+         */
+
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(
+            updatedReleases
+          )
+        );
+
+        /*
+         * --------------------------------------------
+         * 4. UPDATE REACT
+         * --------------------------------------------
+         */
+
+        setReleases(
           updatedReleases
-        )
-      );
+        );
 
-      // ------------------------------------------------
-      // 4. UPDATE REACT STATE
-      // ------------------------------------------------
+        /*
+         * --------------------------------------------
+         * 5. AUDIT LOG
+         * --------------------------------------------
+         */
 
-      setReleases(
-        updatedReleases
-      );
+        addAuditLog(
+          "Rollback Release",
+          `${activeRelease.application} ${newVersion}`,
+          "Success",
+          "System"
+        );
 
-      // ------------------------------------------------
-      // 5. AUDIT LOG
-      // ------------------------------------------------
+        /*
+         * --------------------------------------------
+         * 6. SUCCESS
+         * --------------------------------------------
+         */
 
-      addAuditLog(
-        "Rollback Release",
-        `${activeRelease.application} ${newVersion}`,
-        "Success",
-        "System"
-      );
+        showMessage(
+          `✓ Rollback completed successfully. ${activeRelease.application} is now running ${targetVersion}.`
+        );
+      } catch (error) {
+        console.error(
+          "Rollback failed:",
+          error
+        );
 
-      // ------------------------------------------------
-      // 6. SUCCESS MESSAGE
-      // ------------------------------------------------
+        addAuditLog(
+          "Rollback Release",
+          `${activeRelease.application} ${newVersion}`,
+          "Failed",
+          "System"
+        );
 
-      showMessage(
-        `✓ Rollback completed successfully. ${activeRelease.application} is now running ${targetVersion}.`
-      );
-    } catch (error) {
-      console.error(
-        "Rollback failed:",
-        error
-      );
+        showMessage(
+          `✕ Rollback failed: ${
+            error.message ||
+            "Unable to rollback release."
+          }`
+        );
+      } finally {
+        setIsRollingBack(false);
+      }
+    };
 
-      addAuditLog(
-        "Rollback Release",
-        `${activeRelease.application} ${newVersion}`,
-        "Failed",
-        "System"
-      );
-
-      showMessage(
-        `✕ Rollback failed: ${
-          error.message ||
-          "Unable to rollback release."
-        }`
-      );
-    } finally {
-      setIsRollingBack(false);
-    }
-  };
-
-  // --------------------------------------------------
-  // CALCULATE DASHBOARD VALUES
-  // --------------------------------------------------
+  /*
+   * ------------------------------------------------
+   * DASHBOARD COUNTS
+   * ------------------------------------------------
+   */
 
   const applicationsCount =
     releases.length;
 
   const activeReleasesCount =
-    releases.filter((release) => {
-      const status =
-        String(
-          release.status || ""
-        ).toLowerCase();
+    releases.filter(
+      (release) => {
+        const status =
+          String(
+            release.status || ""
+          ).toLowerCase();
 
-      const approval =
-        String(
-          release.approval || ""
-        ).toLowerCase();
+        const approval =
+          String(
+            release.approval || ""
+          ).toLowerCase();
 
-      const traffic =
-        Number(
-          release.traffic || 0
+        const traffic =
+          Number(
+            release.traffic || 0
+          );
+
+        return (
+          (
+            status ===
+              "canary" ||
+            status ===
+              "canary running"
+          ) &&
+          approval ===
+            "approved" &&
+          traffic > 0
         );
-
-      return (
-        (
-          status === "canary" ||
-          status === "canary running"
-        ) &&
-        approval === "approved" &&
-        traffic > 0
-      );
-    }).length;
+      }
+    ).length;
 
   const rollbackCount =
     releases.filter(
@@ -477,15 +738,17 @@ function Dashboard() {
         "rolled back"
     ).length;
 
-  // --------------------------------------------------
-  // RENDER
-  // --------------------------------------------------
+  /*
+   * ------------------------------------------------
+   * RENDER
+   * ------------------------------------------------
+   */
 
   return (
     <div className="dashboard-page">
 
-      {/* =================================================
-          PAGE HEADER
+      {/* ================================================
+          HEADER
       ================================================= */}
 
       <div className="top-header">
@@ -503,7 +766,7 @@ function Dashboard() {
 
       </div>
 
-      {/* =================================================
+      {/* ================================================
           MESSAGE
       ================================================= */}
 
@@ -519,7 +782,7 @@ function Dashboard() {
         </div>
       )}
 
-      {/* =================================================
+      {/* ================================================
           SYSTEM STATUS
       ================================================= */}
 
@@ -547,14 +810,16 @@ function Dashboard() {
 
       </div>
 
-      {/* =================================================
+      {/* ================================================
           STATISTICS
       ================================================= */}
 
       <section className="stats-grid">
 
         <div className="stat-card">
+
           <div className="stat-top">
+
             <span>
               Applications
             </span>
@@ -562,6 +827,7 @@ function Dashboard() {
             <span className="stat-icon blue">
               ◉
             </span>
+
           </div>
 
           <h2>
@@ -571,10 +837,13 @@ function Dashboard() {
           <p>
             Registered services
           </p>
+
         </div>
 
         <div className="stat-card">
+
           <div className="stat-top">
+
             <span>
               Active Releases
             </span>
@@ -582,6 +851,7 @@ function Dashboard() {
             <span className="stat-icon purple">
               ◆
             </span>
+
           </div>
 
           <h2>
@@ -591,10 +861,13 @@ function Dashboard() {
           <p>
             Currently in canary
           </p>
+
         </div>
 
         <div className="stat-card">
+
           <div className="stat-top">
+
             <span>
               Canary Traffic
             </span>
@@ -602,6 +875,7 @@ function Dashboard() {
             <span className="stat-icon orange">
               %
             </span>
+
           </div>
 
           <h2>
@@ -611,10 +885,13 @@ function Dashboard() {
           <p>
             Current allocation
           </p>
+
         </div>
 
         <div className="stat-card">
+
           <div className="stat-top">
+
             <span>
               Rollbacks
             </span>
@@ -622,6 +899,7 @@ function Dashboard() {
             <span className="stat-icon red">
               ↩
             </span>
+
           </div>
 
           <h2>
@@ -631,75 +909,398 @@ function Dashboard() {
           <p>
             Completed rollbacks
           </p>
+
         </div>
 
       </section>
 
-      {/* =================================================
+      {/* ================================================
           MAIN DASHBOARD
       ================================================= */}
 
       <section className="dashboard-grid">
 
-        {/* =================================================
-            RELEASE HEALTH
-        ================================================= */}
+        {/* ==============================================
+            REAL PROMETHEUS RELEASE HEALTH
+        =============================================== */}
 
         <div className="panel">
 
           <div className="panel-header">
 
             <div>
+
               <h2>
                 Release Health
               </h2>
 
               <p>
-                Current release
-                performance
+                Stable vs Canary
+                application latency
               </p>
+
             </div>
 
-            <span className="healthy-badge">
-              Healthy
+            <span
+              className={
+                latencyMetrics.metricsAvailable
+                  ? "healthy-badge"
+                  : "canary-badge"
+              }
+            >
+              {latencyMetrics.metricsAvailable
+                ? "Live Metrics"
+                : "Waiting"}
             </span>
 
           </div>
 
-          <div className="health-chart">
+          <div
+            style={{
+              marginTop: "24px",
+              padding: "20px",
+              border:
+                "1px solid #e2e8f0",
+              borderRadius: "12px",
+              background:
+                "#ffffff",
+            }}
+          >
 
-            <div className="chart-y">
-              <span>100%</span>
-              <span>75%</span>
-              <span>50%</span>
-              <span>25%</span>
-              <span>0%</span>
+            {/* GRAPH HEADER */}
+
+            <div
+              style={{
+                display:
+                  "flex",
+                justifyContent:
+                  "space-between",
+                alignItems:
+                  "center",
+                marginBottom:
+                  "22px",
+              }}
+            >
+
+              <div>
+
+                <strong
+                  style={{
+                    fontSize:
+                      "16px",
+                    color:
+                      "#172033",
+                  }}
+                >
+                  Stable vs Canary
+                  Latency
+                </strong>
+
+                <p
+                  style={{
+                    margin:
+                      "4px 0 0",
+                    fontSize:
+                      "13px",
+                    color:
+                      "#64748b",
+                  }}
+                >
+                  Real-time
+                  Prometheus
+                  metrics
+                </p>
+
+              </div>
+
+              <span
+                style={{
+                  fontSize:
+                    "12px",
+                  fontWeight:
+                    "600",
+                  color:
+                    latencyMetrics.metricsAvailable
+                      ? "#16a34a"
+                      : "#d97706",
+                }}
+              >
+                {latencyMetrics.metricsAvailable
+                  ? "● LIVE"
+                  : "● WAITING"}
+              </span>
+
             </div>
 
-            <div className="chart-area">
+            {latencyMetrics.metricsAvailable ? (
 
-              <div className="grid-line line1" />
-              <div className="grid-line line2" />
-              <div className="grid-line line3" />
-              <div className="grid-line line4" />
+              <div
+                style={{
+                  display:
+                    "flex",
+                  flexDirection:
+                    "column",
+                  gap: "22px",
+                }}
+              >
 
-              <div className="chart-line" />
+                {/* =================================
+                    STABLE
+                ================================== */}
 
-            </div>
+                <div>
+
+                  <div
+                    style={{
+                      display:
+                        "flex",
+                      justifyContent:
+                        "space-between",
+                      alignItems:
+                        "center",
+                      marginBottom:
+                        "8px",
+                    }}
+                  >
+
+                    <span
+                      style={{
+                        fontWeight:
+                          "600",
+                        color:
+                          "#172033",
+                      }}
+                    >
+                      Stable
+                    </span>
+
+                    <strong
+                      style={{
+                        color:
+                          "#172033",
+                      }}
+                    >
+                      {latencyMetrics.stableLatency.toFixed(
+                        2
+                      )}{" "}
+                      ms
+                    </strong>
+
+                  </div>
+
+                  <div
+                    style={{
+                      height:
+                        "28px",
+                      background:
+                        "#eef2ff",
+                      borderRadius:
+                        "7px",
+                      overflow:
+                        "hidden",
+                    }}
+                  >
+
+                    <div
+                      style={{
+                        height:
+                          "100%",
+                        width:
+                          `${stableBarWidth}%`,
+                        background:
+                          "#4f46e5",
+                        borderRadius:
+                          "7px",
+                        transition:
+                          "width 0.5s ease",
+                      }}
+                    />
+
+                  </div>
+
+                </div>
+
+                {/* =================================
+                    CANARY
+                ================================== */}
+
+                <div>
+
+                  <div
+                    style={{
+                      display:
+                        "flex",
+                      justifyContent:
+                        "space-between",
+                      alignItems:
+                        "center",
+                      marginBottom:
+                        "8px",
+                    }}
+                  >
+
+                    <span
+                      style={{
+                        fontWeight:
+                          "600",
+                        color:
+                          "#172033",
+                      }}
+                    >
+                      Canary
+                    </span>
+
+                    <strong
+                      style={{
+                        color:
+                          "#172033",
+                      }}
+                    >
+                      {latencyMetrics.canaryLatency.toFixed(
+                        2
+                      )}{" "}
+                      ms
+                    </strong>
+
+                  </div>
+
+                  <div
+                    style={{
+                      height:
+                        "28px",
+                      background:
+                        "#f0f9ff",
+                      borderRadius:
+                        "7px",
+                      overflow:
+                        "hidden",
+                    }}
+                  >
+
+                    <div
+                      style={{
+                        height:
+                          "100%",
+                        width:
+                          `${canaryBarWidth}%`,
+                        background:
+                          "#0ea5e9",
+                        borderRadius:
+                          "7px",
+                        transition:
+                          "width 0.5s ease",
+                      }}
+                    />
+
+                  </div>
+
+                </div>
+
+                {/* =================================
+                    LATENCY DIFFERENCE
+                ================================== */}
+
+                <div
+                  style={{
+                    marginTop:
+                      "2px",
+                    paddingTop:
+                      "15px",
+                    borderTop:
+                      "1px solid #e2e8f0",
+                    display:
+                      "flex",
+                    justifyContent:
+                      "space-between",
+                    alignItems:
+                      "center",
+                  }}
+                >
+
+                  <span
+                    style={{
+                      color:
+                        "#64748b",
+                      fontSize:
+                        "13px",
+                    }}
+                  >
+                    Canary latency
+                    difference
+                  </span>
+
+                  <strong
+                    style={{
+                      color:
+                        latencyDifference !==
+                          null &&
+                        latencyDifference >
+                          20
+                          ? "#dc2626"
+                          : "#16a34a",
+                    }}
+                  >
+                    {latencyDifference !==
+                    null
+                      ? `${latencyDifference.toFixed(
+                          2
+                        )}%`
+                      : "N/A"}
+                  </strong>
+
+                </div>
+
+              </div>
+
+            ) : (
+
+              <div
+                style={{
+                  padding:
+                    "40px 20px",
+                  textAlign:
+                    "center",
+                  color:
+                    "#64748b",
+                }}
+              >
+
+                <strong>
+                  Waiting for Prometheus
+                  latency data...
+                </strong>
+
+                <p
+                  style={{
+                    marginTop:
+                      "8px",
+                    fontSize:
+                      "13px",
+                  }}
+                >
+                  Make sure the local
+                  backend and Prometheus
+                  server are running.
+                </p>
+
+              </div>
+
+            )}
 
           </div>
 
         </div>
 
-        {/* =================================================
+        {/* ==============================================
             CURRENT RELEASE
-        ================================================= */}
+        =============================================== */}
 
         <div className="panel">
 
           <div className="panel-header">
 
             <div>
+
               <h2>
                 Current Release
               </h2>
@@ -709,6 +1310,7 @@ function Dashboard() {
                   ? activeRelease.application
                   : "Payment Service"}
               </p>
+
             </div>
 
             <span
@@ -732,6 +1334,7 @@ function Dashboard() {
               {/* VERSION */}
 
               <div className="release-version">
+
                 <span>
                   {currentVersion}
                 </span>
@@ -743,6 +1346,7 @@ function Dashboard() {
                 <strong>
                   {canaryVersion}
                 </strong>
+
               </div>
 
               {/* TRAFFIC */}
@@ -785,6 +1389,7 @@ function Dashboard() {
               <div className="release-details">
 
                 <div>
+
                   <small>
                     Current Version
                   </small>
@@ -793,9 +1398,11 @@ function Dashboard() {
                     {currentVersion ||
                       "N/A"}
                   </strong>
+
                 </div>
 
                 <div>
+
                   <small>
                     Canary Version
                   </small>
@@ -804,9 +1411,11 @@ function Dashboard() {
                     {canaryVersion ||
                       "N/A"}
                   </strong>
+
                 </div>
 
                 <div>
+
                   <small>
                     Status
                   </small>
@@ -815,11 +1424,12 @@ function Dashboard() {
                     {activeRelease.status ||
                       "N/A"}
                   </strong>
+
                 </div>
 
               </div>
 
-              {/* ROLLBACK BUTTON */}
+              {/* ROLLBACK */}
 
               <button
                 type="button"
@@ -859,7 +1469,7 @@ function Dashboard() {
 
       </section>
 
-      {/* =================================================
+      {/* ================================================
           RECENT RELEASES
       ================================================= */}
 
@@ -868,6 +1478,7 @@ function Dashboard() {
         <div className="panel-header">
 
           <div>
+
             <h2>
               Recent Releases
             </h2>
@@ -876,6 +1487,7 @@ function Dashboard() {
               Latest progressive
               delivery activity
             </p>
+
           </div>
 
         </div>
@@ -906,7 +1518,8 @@ function Dashboard() {
 
           </div>
 
-          {releases.length === 0 ? (
+          {releases.length ===
+          0 ? (
 
             <div className="table-row">
 
@@ -922,93 +1535,95 @@ function Dashboard() {
               .slice()
               .reverse()
               .slice(0, 10)
-              .map((release) => {
+              .map(
+                (release) => {
 
-                const status =
-                  String(
-                    release.status ||
-                    ""
-                  );
+                  const status =
+                    String(
+                      release.status ||
+                        ""
+                    );
 
-                const statusLower =
-                  status.toLowerCase();
+                  const statusLower =
+                    status.toLowerCase();
 
-                let statusClass =
-                  "status";
+                  let statusClass =
+                    "status";
 
-                if (
-                  statusLower ===
-                  "completed"
-                ) {
-                  statusClass =
-                    "status healthy";
-                } else if (
-                  statusLower ===
-                    "canary" ||
-                  statusLower ===
-                    "canary running"
-                ) {
-                  statusClass =
-                    "status testing";
-                } else if (
-                  statusLower ===
-                  "rolled back"
-                ) {
-                  statusClass =
-                    "status rollback-status";
-                }
+                  if (
+                    statusLower ===
+                    "completed"
+                  ) {
+                    statusClass =
+                      "status healthy";
+                  } else if (
+                    statusLower ===
+                      "canary" ||
+                    statusLower ===
+                      "canary running"
+                  ) {
+                    statusClass =
+                      "status testing";
+                  } else if (
+                    statusLower ===
+                    "rolled back"
+                  ) {
+                    statusClass =
+                      "status rollback-status";
+                  }
 
-                return (
-                  <div
-                    className="table-row"
-                    key={
-                      release.id
-                    }
-                  >
-
-                    <strong>
-                      {
-                        release.application ||
-                        release.serviceName ||
-                        "Payment Service"
-                      }
-                    </strong>
-
-                    <span>
-                      {
-                        release.newVersion ||
-                        release.version ||
-                        "N/A"
-                      }
-                    </span>
-
-                    <span
-                      className={
-                        statusClass
+                  return (
+                    <div
+                      className="table-row"
+                      key={
+                        release.id
                       }
                     >
-                      {status ||
-                        "Created"}
-                    </span>
 
-                    <span>
-                      {Number(
-                        release.traffic ||
-                        0
-                      )}
-                      %
-                    </span>
+                      <strong>
+                        {
+                          release.application ||
+                          release.serviceName ||
+                          "Payment Service"
+                        }
+                      </strong>
 
-                    <span>
-                      {
-                        release.approval ||
-                        "Pending"
-                      }
-                    </span>
+                      <span>
+                        {
+                          release.newVersion ||
+                          release.version ||
+                          "N/A"
+                        }
+                      </span>
 
-                  </div>
-                );
-              })
+                      <span
+                        className={
+                          statusClass
+                        }
+                      >
+                        {status ||
+                          "Created"}
+                      </span>
+
+                      <span>
+                        {Number(
+                          release.traffic ||
+                            0
+                        )}
+                        %
+                      </span>
+
+                      <span>
+                        {
+                          release.approval ||
+                          "Pending"
+                        }
+                      </span>
+
+                    </div>
+                  );
+                }
+              )
 
           )}
 
